@@ -58,7 +58,7 @@ describe("crunchbaseLookup", () => {
     );
 
     expect(evidence.signal_type).toBe("funding_round");
-    expect(evidence.source).toBe("crunchbase");
+    expect(evidence.source).toBe("web_lookup");
     expect(evidence.confidence_tier).toBe("medium");
     expect(evidence.organizer_profile).toBeNull();
     expect(evidence.reputability_score).toBeNull();
