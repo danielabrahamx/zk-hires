@@ -10,15 +10,9 @@ vi.mock("@/agents/researcher/sources/companies-house", async () => {
     companiesHouseLookup: vi.fn(),
   };
 });
-vi.mock("@/agents/researcher/sources/crunchbase", async () => {
-  const actual = await vi.importActual<
-    typeof import("@/agents/researcher/sources/crunchbase")
-  >("@/agents/researcher/sources/crunchbase");
-  return {
-    ...actual,
-    crunchbaseLookup: vi.fn(),
-  };
-});
+vi.mock("@/agents/researcher/sources/web-lookup", () => ({
+  webLookup: vi.fn(),
+}));
 vi.mock("@/agents/researcher/sources/certificate", async () => {
   const actual = await vi.importActual<
     typeof import("@/agents/researcher/sources/certificate")
@@ -38,7 +32,7 @@ import {
   companiesHouseLookup,
   NotFoundError,
 } from "@/agents/researcher/sources/companies-house";
-import { crunchbaseLookup } from "@/agents/researcher/sources/crunchbase";
+import { webLookup } from "@/agents/researcher/sources/web-lookup";
 import {
   certificateUpload,
   RefusalError,
@@ -161,32 +155,32 @@ describe("runResearcher - employer flow (reputable_company)", () => {
   beforeEach(() => {
     vi.mocked(recordEvent).mockReset();
     vi.mocked(companiesHouseLookup).mockReset();
-    vi.mocked(crunchbaseLookup).mockReset();
+    vi.mocked(webLookup).mockReset();
   });
 
-  it("returns evidence from both Companies House and Crunchbase", async () => {
+  it("returns evidence from both Companies House and web lookup", async () => {
     const chEvidence = makeEvidence({
       source: "companies_house",
       signal_type: "company_record",
       confidence_tier: "very_high",
     });
-    const cbEvidence = makeEvidence({
-      source: "crunchbase",
+    const webEvidence = makeEvidence({
+      source: "web_lookup",
       signal_type: "funding_round",
-      confidence_tier: "high",
+      confidence_tier: "medium",
     });
     vi.mocked(companiesHouseLookup).mockResolvedValue(chEvidence);
-    vi.mocked(crunchbaseLookup).mockResolvedValue(cbEvidence);
+    vi.mocked(webLookup).mockResolvedValue(webEvidence);
 
     const result = await runResearcher({
       claim_type: "reputable_company",
       companyNumber: "00000006",
-      crunchbaseSlugOrUrl: "sibrox",
+      supplementaryUrl: "https://sibrox.com",
     });
 
     expect(result.evidence).toHaveLength(2);
     const sources = result.evidence.map((e) => e.source).sort();
-    expect(sources).toEqual(["companies_house", "crunchbase"]);
+    expect(sources).toEqual(["companies_house", "web_lookup"]);
     expect(typeof result.runId).toBe("string");
     expect(result.runId.length).toBeGreaterThan(0);
 
@@ -194,8 +188,8 @@ describe("runResearcher - employer flow (reputable_company)", () => {
       "00000006",
       result.runId
     );
-    expect(vi.mocked(crunchbaseLookup)).toHaveBeenCalledWith(
-      "sibrox",
+    expect(vi.mocked(webLookup)).toHaveBeenCalledWith(
+      "https://sibrox.com",
       result.runId
     );
     expect(vi.mocked(recordEvent).mock.calls.length).toBeGreaterThan(0);
@@ -205,9 +199,9 @@ describe("runResearcher - employer flow (reputable_company)", () => {
     vi.mocked(companiesHouseLookup).mockRejectedValue(
       new NotFoundError("not found")
     );
-    vi.mocked(crunchbaseLookup).mockResolvedValue(
+    vi.mocked(webLookup).mockResolvedValue(
       makeEvidence({
-        source: "crunchbase",
+        source: "web_lookup",
         signal_type: "funding_round",
       })
     );
@@ -216,7 +210,7 @@ describe("runResearcher - employer flow (reputable_company)", () => {
       runResearcher({
         claim_type: "reputable_company",
         companyNumber: "99999999",
-        crunchbaseSlugOrUrl: "nope",
+        supplementaryUrl: "https://nope.example.com",
       })
     ).rejects.toBeInstanceOf(NotFoundError);
 

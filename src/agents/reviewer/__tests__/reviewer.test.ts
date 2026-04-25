@@ -76,7 +76,7 @@ describe("runReviewer — integration", () => {
       matched_data_points: ["SIBROX LTD", "active"],
     });
     const cb = makeEvidence({
-      source: "crunchbase",
+      source: "web_lookup",
       signal_type: "funding_round",
       confidence_tier: "high",
       matched_data_points: ["funding_bracket:500k_2m"],

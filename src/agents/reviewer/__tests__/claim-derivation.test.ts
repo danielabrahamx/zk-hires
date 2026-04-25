@@ -105,7 +105,7 @@ describe("deriveEmployerFinding", () => {
       matched_data_points: ["SIBROX LTD", "active"],
     });
     const cb = makeEvidence({
-      source: "crunchbase",
+      source: "web_lookup",
       signal_type: "funding_round",
       confidence_tier: "high",
       matched_data_points: ["funding_bracket:500k_2m"],
@@ -127,7 +127,7 @@ describe("deriveEmployerFinding", () => {
 
   it("returns Gap when Companies House evidence is missing", () => {
     const cb = makeEvidence({
-      source: "crunchbase",
+      source: "web_lookup",
       signal_type: "funding_round",
       matched_data_points: ["funding_bracket:500k_2m"],
     });
@@ -149,7 +149,7 @@ describe("deriveEmployerFinding", () => {
       matched_data_points: ["SIBROX LTD", "active"],
     });
     const cb = makeEvidence({
-      source: "crunchbase",
+      source: "web_lookup",
       signal_type: "funding_round",
       confidence_tier: "high",
       matched_data_points: ["funding_bracket:lt_500k"],

@@ -168,7 +168,7 @@ export async function crunchbaseLookup(
     const evidence: Evidence = {
       id: randomUUID(),
       run_id: runId,
-      source: "crunchbase",
+      source: "web_lookup",
       source_url: url,
       retrieved_at: new Date().toISOString(),
       raw_artifact_hash: rawArtifactHash,
