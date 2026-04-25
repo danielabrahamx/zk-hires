@@ -1,37 +1,18 @@
 import { randomUUID } from "node:crypto";
 
-import {
-  companiesHouseLookup,
-} from "@/agents/researcher/sources/companies-house";
-import {
-  crunchbaseLookup,
-} from "@/agents/researcher/sources/crunchbase";
-import {
-  certificateUpload,
-} from "@/agents/researcher/sources/certificate";
-import {
-  lookupOrganizerProfile,
-} from "@/agents/researcher/sources/organizer-profile";
+import { companiesHouseLookup } from "@/agents/researcher/sources/companies-house";
+import { webLookup } from "@/agents/researcher/sources/web-lookup";
+import { certificateUpload } from "@/agents/researcher/sources/certificate";
+import { lookupOrganizerProfile } from "@/agents/researcher/sources/organizer-profile";
 import { recordEvent } from "@/trace/store";
-import {
-  EvidenceSchema,
-  type Evidence,
-} from "@/types/evidence";
+import { EvidenceSchema, type Evidence } from "@/types/evidence";
 
 /**
  * Researcher orchestrator.
  *
- * Coordinates the four Phase 2 source modules into a single agent flow.
  * Two flavours:
- *  - "hackathon_wins": runs certificate OCR, then enriches the resulting
- *    Evidence with an organizer profile lookup if the certificate yielded
- *    an organizer name.
- *  - "reputable_company": runs Companies House and Crunchbase lookups
- *    in parallel.
- *
- * Every external call is bookended by a TraceEvent (start + done). On
- * failure, an error TraceEvent is emitted and the error is re-thrown so
- * the caller (Reviewer / API route) can decide how to surface it.
+ *  - "hackathon_wins": certificate OCR then optional organizer profile enrichment.
+ *  - "reputable_company": Companies House + web-lookup (any URL) run in parallel.
  */
 
 export type ResearcherInput =
@@ -39,7 +20,7 @@ export type ResearcherInput =
   | {
       claim_type: "reputable_company";
       companyNumber: string;
-      crunchbaseSlugOrUrl: string;
+      supplementaryUrl: string;
     };
 
 export interface ResearcherResult {
@@ -51,11 +32,9 @@ export async function runResearcher(
   input: ResearcherInput
 ): Promise<ResearcherResult> {
   const runId = randomUUID();
-
   if (input.claim_type === "hackathon_wins") {
     return runCandidateFlow(input, runId);
   }
-
   return runEmployerFlow(input, runId);
 }
 
@@ -77,11 +56,7 @@ async function runCandidateFlow(
 
   let certEvidence: Evidence;
   try {
-    certEvidence = await certificateUpload(
-      input.file,
-      input.mimeType,
-      runId
-    );
+    certEvidence = await certificateUpload(input.file, input.mimeType, runId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     recordEvent({
@@ -110,7 +85,6 @@ async function runCandidateFlow(
   });
 
   const organizerName = certEvidence.notes?.trim() ?? "";
-
   if (organizerName.length === 0) {
     return { evidence: [certEvidence], runId };
   }
@@ -145,7 +119,6 @@ async function runCandidateFlow(
       ...certEvidence,
       organizer_profile: profile,
     });
-
     return { evidence: [enriched], runId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -160,8 +133,7 @@ async function runCandidateFlow(
       error: message,
       evidence_ids: [certEvidence.id],
     });
-    // Organizer profile is enrichment - if it fails, return the
-    // unenriched certificate evidence rather than failing the whole run.
+    // Organizer profile is enrichment only - degrade gracefully.
     return { evidence: [certEvidence], runId };
   }
 }
@@ -186,19 +158,19 @@ async function runEmployerFlow(
     ts: startTs,
     run_id: runId,
     agent: "researcher",
-    action: "crunchbase_start",
-    input: { slugOrUrl: input.crunchbaseSlugOrUrl },
+    action: "web_lookup_start",
+    input: { url: input.supplementaryUrl },
     output: null,
     latency_ms: 0,
     evidence_ids: [],
   });
 
   let chEvidence: Evidence;
-  let cbEvidence: Evidence;
+  let webEvidence: Evidence;
   try {
-    [chEvidence, cbEvidence] = await Promise.all([
+    [chEvidence, webEvidence] = await Promise.all([
       companiesHouseLookup(input.companyNumber, runId),
-      crunchbaseLookup(input.crunchbaseSlugOrUrl, runId),
+      webLookup(input.supplementaryUrl, runId),
     ]);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -207,10 +179,7 @@ async function runEmployerFlow(
       run_id: runId,
       agent: "researcher",
       action: "employer_lookup_failed",
-      input: {
-        companyNumber: input.companyNumber,
-        slugOrUrl: input.crunchbaseSlugOrUrl,
-      },
+      input: { companyNumber: input.companyNumber, url: input.supplementaryUrl },
       output: null,
       latency_ms: Date.now() - startTs,
       error: message,
@@ -226,10 +195,7 @@ async function runEmployerFlow(
     agent: "researcher",
     action: "companies_house_done",
     input: { companyNumber: input.companyNumber },
-    output: {
-      id: chEvidence.id,
-      confidence_tier: chEvidence.confidence_tier,
-    },
+    output: { id: chEvidence.id, confidence_tier: chEvidence.confidence_tier },
     latency_ms: doneTs - startTs,
     evidence_ids: [chEvidence.id],
   });
@@ -237,15 +203,12 @@ async function runEmployerFlow(
     ts: doneTs,
     run_id: runId,
     agent: "researcher",
-    action: "crunchbase_done",
-    input: { slugOrUrl: input.crunchbaseSlugOrUrl },
-    output: {
-      id: cbEvidence.id,
-      confidence_tier: cbEvidence.confidence_tier,
-    },
+    action: "web_lookup_done",
+    input: { url: input.supplementaryUrl },
+    output: { id: webEvidence.id, confidence_tier: webEvidence.confidence_tier },
     latency_ms: doneTs - startTs,
-    evidence_ids: [cbEvidence.id],
+    evidence_ids: [webEvidence.id],
   });
 
-  return { evidence: [chEvidence, cbEvidence], runId };
+  return { evidence: [chEvidence, webEvidence], runId };
 }

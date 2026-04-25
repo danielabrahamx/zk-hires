@@ -81,11 +81,11 @@ export function deriveEmployerFinding(
   const ch = evidence.find(
     (e) => e.source === "companies_house" && e.confidence_tier === "very_high"
   );
-  const cb = evidence.find((e) => e.source === "crunchbase");
+  const cb = evidence.find((e) => e.source === "web_lookup");
 
   const missing: string[] = [];
   if (!ch) missing.push("active Companies House record");
-  if (!cb) missing.push("Crunchbase funding record");
+  if (!cb) missing.push("web lookup funding record");
 
   if (!ch || !cb) {
     return {
@@ -99,8 +99,8 @@ export function deriveEmployerFinding(
   if (bracket === null) {
     return {
       claim_type: "reputable_company",
-      reason: "Crunchbase evidence has no funding bracket",
-      missing_evidence: ["funding_bracket annotation on Crunchbase evidence"],
+      reason: "Web lookup evidence has no funding bracket",
+      missing_evidence: ["funding_bracket annotation on web lookup evidence"],
     };
   }
 

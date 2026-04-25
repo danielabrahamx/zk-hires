@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@aztec/bb.js"],
+  serverExternalPackages: ["@aztec/bb.js", "better-sqlite3"],
   turbopack: {
     resolveAlias: {
       pino: "pino/browser.js",

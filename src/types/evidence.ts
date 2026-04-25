@@ -23,7 +23,7 @@ export const EvidenceSchema = z.object({
   run_id: z.string().uuid(),
   source: z.enum([
     "companies_house",
-    "crunchbase",
+    "web_lookup",
     "certificate",
     "linkedin",
     "x",

@@ -48,6 +48,16 @@ function getDb(): Database.Database {
       evidence_ids TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_traces_run ON traces(run_id);
+    CREATE TABLE IF NOT EXISTS credentials (
+      proof_code TEXT PRIMARY KEY,
+      claim_type TEXT NOT NULL,
+      claim_value TEXT NOT NULL,
+      proof_json TEXT NOT NULL,
+      public_claims TEXT NOT NULL,
+      nullifier TEXT NOT NULL,
+      issued_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
   `);
   db = handle;
   currentPath = path;
@@ -128,6 +138,51 @@ function hashEventLeaf(e: TraceEvent): bigint {
   let hex = "0x";
   for (const b of digest) hex += b.toString(16).padStart(2, "0");
   return BigInt(hex);
+}
+
+export interface CredentialRow {
+  proof_code: string;
+  claim_type: string;
+  claim_value: string;
+  proof_json: string;
+  public_claims: Record<string, string>;
+  nullifier: string;
+  issued_at: number;
+  expires_at: number;
+}
+
+type CredentialDbRow = Omit<CredentialRow, "public_claims"> & {
+  public_claims: string;
+};
+
+export function storeCredential(row: CredentialRow): void {
+  getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO credentials
+       (proof_code, claim_type, claim_value, proof_json, public_claims, nullifier, issued_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      row.proof_code,
+      row.claim_type,
+      row.claim_value,
+      row.proof_json,
+      JSON.stringify(row.public_claims),
+      row.nullifier,
+      row.issued_at,
+      row.expires_at
+    );
+}
+
+export function lookupCredential(proofCode: string): CredentialRow | null {
+  const row = getDb()
+    .prepare(`SELECT * FROM credentials WHERE proof_code = ?`)
+    .get(proofCode) as CredentialDbRow | undefined;
+  if (!row) return null;
+  return {
+    ...row,
+    public_claims: JSON.parse(row.public_claims) as Record<string, string>,
+  };
 }
 
 /**
