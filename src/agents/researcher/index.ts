@@ -37,10 +37,27 @@ export async function runResearcher(
   emit: StepEmitter = () => {}
 ): Promise<ResearcherResult> {
   const runId = randomUUID();
+
+  const { runResearcherWithToolUse } = await import("./tool-loop");
   if (input.claim_type === "hackathon_wins") {
-    return runCandidateFlow(input, runId, emit);
+    const candidateInputs = {
+      file: "file" in input ? input.file : undefined,
+      mimeType: "file" in input ? input.mimeType : undefined,
+      postLinks: input.postLinks,
+    };
+    const result = await runResearcherWithToolUse({ candidateInputs, flow: "candidate", runId });
+    return { ...result, runId };
+  } else {
+    const result = await runResearcherWithToolUse({
+      employerInputs: {
+        companyNumber: input.companyNumber,
+        supplementaryUrl: input.supplementaryUrl,
+      },
+      flow: "employer",
+      runId,
+    });
+    return { ...result, runId };
   }
-  return runEmployerFlow(input, runId, emit);
 }
 
 async function runCandidateFlow(
