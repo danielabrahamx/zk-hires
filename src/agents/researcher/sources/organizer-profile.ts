@@ -82,14 +82,23 @@ export async function lookupOrganizerProfile(
           type: "web_search_20260209" as "web_search_20260209",
           name: "web_search",
           max_uses: 5,
+          // Anthropic's web_search tool rejects wildcard hostnames (`*.ai`, etc.)
+          // with a 400. Use plain hostnames only — covers the platforms hackathon
+          // organizers actually use.
           allowed_domains: [
             "linkedin.com",
             "twitter.com",
             "x.com",
-            "*.org",
-            "*.io",
-            "*.club",
-            "*.ai",
+            "devpost.com",
+            "github.com",
+            "medium.com",
+            "dev.to",
+            "techcrunch.com",
+            "eventbrite.com",
+            "lu.ma",
+            "ethglobal.com",
+            "easya.io",
+            "easya.ai",
           ],
           user_location: { type: "approximate", country: "GB" },
         },

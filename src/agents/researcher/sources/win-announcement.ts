@@ -209,10 +209,69 @@ async function fetchWithOEmbed(url: string): Promise<string | null> {
   }
 }
 
+// Twitter/X syndication endpoint - same path react-tweet uses. Returns
+// structured JSON with full tweet text + author. More reliable than oEmbed
+// (which only returns rendered HTML) and gives the verifier a clean signal.
+function tweetIdFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.includes("twitter.com") && !host.includes("x.com")) return null;
+    const m = parsed.pathname.match(/\/status\/(\d{6,})/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+function syndicationToken(id: string): string {
+  return ((Number(id) / 1e15) * Math.PI)
+    .toString(36)
+    .replace(/(0+|\.)/g, "");
+}
+
+async function fetchWithSyndication(url: string): Promise<string | null> {
+  const id = tweetIdFromUrl(url);
+  if (!id) return null;
+  const token = syndicationToken(id);
+  try {
+    const res = await fetch(
+      `https://cdn.syndication.twimg.com/tweet-result?id=${id}&token=${token}`,
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      text?: string;
+      full_text?: string;
+      user?: { name?: string; screen_name?: string };
+      created_at?: string;
+    };
+    const tweet = data.full_text ?? data.text ?? "";
+    if (tweet.length < 10) return null;
+    const author = data.user?.name ?? "unknown";
+    const handle = data.user?.screen_name ?? "unknown";
+    return [
+      `Tweet by ${author} (@${handle})`,
+      data.created_at ? `Posted: ${data.created_at}` : null,
+      "",
+      tweet,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    return null;
+  }
+}
+
 async function fetchPageContent(url: string): Promise<{ text: string; resolvedUrl: string }> {
   assertSafeUrl(url);
   const md = await fetchWithFirecrawl(url);
   if (md) return { text: md, resolvedUrl: url };
+  const syn = await fetchWithSyndication(url);
+  if (syn) return { text: syn, resolvedUrl: url };
   const oembed = await fetchWithOEmbed(url);
   if (oembed) return { text: oembed, resolvedUrl: url };
   try {

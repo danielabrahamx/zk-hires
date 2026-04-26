@@ -362,10 +362,134 @@ async function fetchNative(url: string, runId: string): Promise<FetchResult> {
   }
 }
 
+// Twitter/X syndication endpoint - the same path react-tweet uses to render
+// embedded tweets without auth. Returns structured JSON with the full tweet
+// text, author name/handle, and timestamp. Far more reliable than scraping
+// x.com's JS-disabled bot wall (which yields ~493 chars of error page).
+function tweetIdFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.includes("twitter.com") && !host.includes("x.com")) return null;
+    const m = parsed.pathname.match(/\/status\/(\d{6,})/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+function syndicationToken(id: string): string {
+  // Algorithm lifted from X's own embed widget (and react-tweet).
+  // Deterministic hash keyed off the numeric tweet id.
+  return ((Number(id) / 1e15) * Math.PI)
+    .toString(36)
+    .replace(/(0+|\.)/g, "");
+}
+
+async function fetchWithSyndication(
+  url: string,
+  runId: string
+): Promise<FetchResult | null> {
+  const id = tweetIdFromUrl(url);
+  if (!id) return null;
+  const token = syndicationToken(id);
+  const endpoint = `https://cdn.syndication.twimg.com/tweet-result?id=${id}&token=${token}`;
+
+  emitEvent({
+    run_id: runId,
+    agent: "researcher.web_lookup",
+    kind: "tool_call",
+    message: `Fetching tweet ${id} via syndication`,
+    data: { url, fetcher: "syndication", tweet_id: id },
+  });
+
+  try {
+    const res = await fetch(endpoint, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(WEB_LOOKUP_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      emitEvent({
+        run_id: runId,
+        agent: "researcher.web_lookup",
+        kind: "tool_result",
+        message: `Syndication returned ${res.status}`,
+        data: { url, fetcher: "syndication", http_status: res.status, ok: false },
+      });
+      return null;
+    }
+    const data = (await res.json()) as {
+      text?: string;
+      full_text?: string;
+      user?: { name?: string; screen_name?: string };
+      created_at?: string;
+    };
+    const tweetText = data.full_text ?? data.text ?? "";
+    if (!tweetText) {
+      emitEvent({
+        run_id: runId,
+        agent: "researcher.web_lookup",
+        kind: "tool_result",
+        message: "Syndication returned no tweet text",
+        data: { url, fetcher: "syndication", http_status: res.status },
+      });
+      return null;
+    }
+    const author = data.user?.name ?? "unknown";
+    const handle = data.user?.screen_name ?? "unknown";
+    const composed = [
+      `Tweet by ${author} (@${handle})`,
+      data.created_at ? `Posted: ${data.created_at}` : null,
+      "",
+      tweetText,
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, WEB_LOOKUP_MAX_CONTENT_CHARS);
+
+    emitEvent({
+      run_id: runId,
+      agent: "researcher.web_lookup",
+      kind: "tool_result",
+      message: `Syndication fetched tweet (${composed.length} chars)`,
+      data: {
+        url,
+        fetcher: "syndication",
+        http_status: res.status,
+        content_length: composed.length,
+        author_handle: handle,
+      },
+    });
+
+    return {
+      text: composed,
+      resolvedUrl: url,
+      statusCode: res.status,
+      unreachable: false,
+      via: "native",
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    emitEvent({
+      run_id: runId,
+      agent: "researcher.web_lookup",
+      kind: "error",
+      message: `Syndication fetch failed: ${message}`,
+      data: { url, fetcher: "syndication" },
+      error: message,
+    });
+    return null;
+  }
+}
+
 async function fetchPageContent(url: string, runId: string): Promise<FetchResult> {
   assertSafeUrl(url);
   const fc = await fetchWithFirecrawl(url, runId);
   if (fc) return fc;
+  // Twitter/X-only path: official syndication endpoint before falling back to
+  // native fetch (which gets a JS-disabled bot wall on x.com).
+  const syn = await fetchWithSyndication(url, runId);
+  if (syn) return syn;
   return fetchNative(url, runId);
 }
 
