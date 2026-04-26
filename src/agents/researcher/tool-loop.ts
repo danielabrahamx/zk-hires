@@ -377,9 +377,11 @@ export async function runResearcherWithToolUse({
     employerInputs
   );
   const baseSystemPrompt = buildSystemPrompt(flow);
+  const sanitizeHint = (s: string) =>
+    s.replace(/`/g, "'").replace(/^#+\s*/gm, "").slice(0, 500);
   const hintsSection =
     contextHints && contextHints.length > 0
-      ? `\n\n## Retry Context\nThe Reviewer previously found insufficient evidence. Specifically, it needs:\n${contextHints.map((h) => `- ${h}`).join("\n")}\nFocus your searches on finding evidence that addresses these gaps.`
+      ? `\n\n## Retry Context\nThe Reviewer previously found insufficient evidence. Specifically, it needs:\n${contextHints.map((h) => `- ${sanitizeHint(h)}`).join("\n")}\nFocus your searches on finding evidence that addresses these gaps.`
       : "";
   const systemPrompt = baseSystemPrompt + hintsSection;
   let iterations = 0;
