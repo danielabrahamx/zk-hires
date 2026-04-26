@@ -25,6 +25,7 @@ export type TraceEventAgent =
   | "reviewer"
   | "issuer"
   | "verifier"
+  | "coordinator"
   // Source-level granularity for the dashboard. Lets us colour pills per
   // source and animate them independently in the timeline.
   | "researcher.planner"
