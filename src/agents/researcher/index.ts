@@ -47,7 +47,7 @@ export async function runResearcher(
       mimeType: "file" in input ? input.mimeType : undefined,
       postLinks: input.postLinks,
     };
-    const result = await runResearcherWithToolUse({ candidateInputs, flow: "candidate", runId });
+    const result = await runResearcherWithToolUse({ candidateInputs, flow: "candidate", runId, contextHints: input.contextHints });
     return { ...result, runId };
   } else {
     const result = await runResearcherWithToolUse({
@@ -57,6 +57,7 @@ export async function runResearcher(
       },
       flow: "employer",
       runId,
+      contextHints: input.contextHints,
     });
     return { ...result, runId };
   }

@@ -344,12 +344,14 @@ export async function runResearcherWithToolUse({
   employerInputs,
   flow,
   runId,
+  contextHints,
   _anthropicClient,
 }: {
   candidateInputs?: CandidateInputs;
   employerInputs?: EmployerInputs;
   flow: "candidate" | "employer";
   runId: string;
+  contextHints?: string[];
   /** Test injection point — omit in production; the function creates its own client. */
   _anthropicClient?: Anthropic;
 }): Promise<{ evidence: Evidence[] }> {
@@ -374,7 +376,12 @@ export async function runResearcherWithToolUse({
     candidateInputs,
     employerInputs
   );
-  const systemPrompt = buildSystemPrompt(flow);
+  const baseSystemPrompt = buildSystemPrompt(flow);
+  const hintsSection =
+    contextHints && contextHints.length > 0
+      ? `\n\n## Retry Context\nThe Reviewer previously found insufficient evidence. Specifically, it needs:\n${contextHints.map((h) => `- ${h}`).join("\n")}\nFocus your searches on finding evidence that addresses these gaps.`
+      : "";
+  const systemPrompt = baseSystemPrompt + hintsSection;
   let iterations = 0;
 
   while (iterations < MAX_ITERATIONS) {
