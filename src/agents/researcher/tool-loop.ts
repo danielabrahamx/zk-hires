@@ -26,103 +26,64 @@ export interface EmployerInputs {
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const TOOLS: any[] = [
-  // Server-side web search — the API executes this automatically within
-  // the model's response; no executeTool handler needed.
-  { type: "web_search_20260209", name: "web_search" },
-  {
-    name: "companies_house_lookup",
-    description:
-      "Query Companies House by UK company registration number. Returns structured evidence with company status, name, date of creation, and confidence tier.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        company_number: {
-          type: "string",
-          description: "UK company registration number (up to 8 digits)",
-        },
-      },
-      required: ["company_number"],
-    },
-  },
-  {
-    name: "web_fetch_url",
-    description:
-      "Fetch and analyse any HTTPS URL for company legitimacy signals (funding bracket, employee count, press coverage, founding year). Returns structured evidence.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        url: { type: "string", description: "HTTPS URL to fetch and analyse" },
-      },
-      required: ["url"],
-    },
-  },
-  {
-    name: "read_certificate",
-    description:
-      "OCR the attached hackathon certificate using vision. Extracts organizer_name, event_name, candidate_name, year. Returns structured evidence. Call this when a certificate image or PDF is present.",
-    input_schema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: "lookup_organizer_profile",
-    description:
-      "Cross-reference a hackathon organizer on LinkedIn/X to verify reputability (follower count, account age, third-party coverage). Enriches the existing certificate evidence.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        organizer_name: {
-          type: "string",
-          description: "Name of the hackathon organizer or organization",
-        },
-      },
-      required: ["organizer_name"],
-    },
-  },
-  {
-    name: "find_win_announcement",
-    description:
-      "Verify a hackathon win from a post URL (LinkedIn, X, DevPost, news article, etc.). Returns structured evidence with confidence tier.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        url: {
-          type: "string",
-          description: "HTTPS URL of the win announcement post or article",
-        },
-      },
-      required: ["url"],
-    },
-  },
-  {
-    name: "verify_tweet_author",
-    description:
-      "Verify the legitimacy of an X (Twitter) profile by handle. Returns follower count, account age estimate, and verified status. Use this on the tweet author handle (revealed by find_win_announcement as 'tweet_author_handle:<handle>' in matched_data_points) to assess whether the account looks like a real, established person/org. Attaches the resulting profile to the most recent win_announcement Evidence.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        handle: {
-          type: "string",
-          description: "X handle without the @ prefix (e.g. 'ETHGlobal' not '@ETHGlobal')",
-        },
-      },
-      required: ["handle"],
-    },
-  },
-  {
-    name: "done",
-    description:
-      "Signal that you have gathered all available evidence. Call this after researching every provided input.",
-    input_schema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
-];
+const T_WEB_SEARCH: any = { type: "web_search_20260209", name: "web_search" };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const T_COMPANIES_HOUSE: any = {
+  name: "companies_house_lookup",
+  description: "Query Companies House by UK company registration number. Returns structured evidence with company status, name, date of creation, and confidence tier.",
+  input_schema: { type: "object" as const, properties: { company_number: { type: "string", description: "UK company registration number (up to 8 digits)" } }, required: ["company_number"] },
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const T_WEB_FETCH: any = {
+  name: "web_fetch_url",
+  description: "Fetch and analyse any HTTPS URL for company legitimacy signals (funding bracket, employee count, press coverage, founding year). Returns structured evidence.",
+  input_schema: { type: "object" as const, properties: { url: { type: "string", description: "HTTPS URL to fetch and analyse" } }, required: ["url"] },
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const T_READ_CERT: any = {
+  name: "read_certificate",
+  description: "OCR the attached hackathon certificate using vision. Extracts organizer_name, event_name, candidate_name, year. Returns structured evidence. Call this when a certificate image or PDF is present.",
+  input_schema: { type: "object" as const, properties: {}, required: [] },
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const T_ORGANIZER_PROFILE: any = {
+  name: "lookup_organizer_profile",
+  description: "Cross-reference a hackathon organizer on LinkedIn/X to verify reputability (follower count, account age, third-party coverage). Enriches the existing certificate evidence.",
+  input_schema: { type: "object" as const, properties: { organizer_name: { type: "string", description: "Name of the hackathon organizer or organization" } }, required: ["organizer_name"] },
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const T_WIN_ANNOUNCEMENT: any = {
+  name: "find_win_announcement",
+  description: "Verify a hackathon win from a post URL (LinkedIn, X, DevPost, news article, etc.). Returns structured evidence with confidence tier.",
+  input_schema: { type: "object" as const, properties: { url: { type: "string", description: "HTTPS URL of the win announcement post or article" } }, required: ["url"] },
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const T_VERIFY_AUTHOR: any = {
+  name: "verify_tweet_author",
+  description: "Verify the legitimacy of an X (Twitter) profile by handle. Call this with the handle from tweet_author_handle:<handle> in matched_data_points after find_win_announcement.",
+  input_schema: { type: "object" as const, properties: { handle: { type: "string", description: "X handle without the @ prefix" } }, required: ["handle"] },
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const T_DONE: any = {
+  name: "done",
+  description: "Signal that you have gathered all available evidence. Call this immediately after completing your assigned steps.",
+  input_schema: { type: "object" as const, properties: {}, required: [] },
+};
+
+/** Return only the tools relevant for this flow/input shape — prevents the model drifting to irrelevant tools. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getTools(flow: "candidate" | "employer", hasFile: boolean, hasLinks: boolean): any[] {
+  if (flow === "employer") {
+    // Employer: read the provided URL + CH lookup. No web_search cross-referencing.
+    return [T_COMPANIES_HOUSE, T_WEB_FETCH, T_DONE];
+  }
+  if (!hasFile && hasLinks) {
+    // Tweet-only candidate: read the tweet, verify the author. Nothing else.
+    return [T_WIN_ANNOUNCEMENT, T_VERIFY_AUTHOR, T_DONE];
+  }
+  // Cert-based candidate (file present, with or without links)
+  return [T_WEB_SEARCH, T_READ_CERT, T_ORGANIZER_PROFILE, T_WIN_ANNOUNCEMENT, T_VERIFY_AUTHOR, T_DONE];
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -171,33 +132,19 @@ Stop as soon as you have one verified win announcement and one verified author p
     // Default candidate flow (file present, with or without links)
     return `You are a due diligence researcher for a ZK credential system. Your task is to gather evidence about a hackathon winner.
 
-Research strategy:
-1. If a certificate is attached, call read_certificate to extract structured fields.
-2. After extracting certificate fields, use web_search to independently verify the event existed:
-   - Search "[Event Name] [Year]" or "[Event Name] hackathon winners"
-   - Search "[Organizer Name]" to confirm they run real hackathons
-3. Call lookup_organizer_profile with the organizer name to enrich reputability signals.
-4. For each post link provided, call find_win_announcement to verify the win announcement. If the result includes a 'tweet_author_handle:<handle>' matched_data_point, you MAY also call verify_tweet_author with that handle as additional corroboration.
-5. If web_search results contradict the certificate (event doesn't exist, organizer unknown), note this explicitly.
-6. When all inputs have been researched, call done.
-
-Be proactive with web_search — use it to corroborate or challenge what the certificate claims. If organizer signals are weak, search specifically for them.`;
+Steps (follow exactly):
+1. Call read_certificate on the attached file.
+2. Call lookup_organizer_profile with the organizer name from the certificate.
+3. For each post link, call find_win_announcement. If the result contains tweet_author_handle:<handle>, call verify_tweet_author(handle).
+4. Call done.`;
   }
+  // Employer flow — trust the provided sources, no cross-referencing
   return `You are a due diligence researcher for a ZK credential system. Your task is to gather evidence about an employer.
 
-Research strategy:
-1. If a company number is provided, call companies_house_lookup to verify company status (official UK registry).
-2. If a supplementary URL is provided, call web_fetch_url to extract funding and legitimacy signals.
-3. Use web_search to proactively find corroborating or contradicting evidence:
-   - Search "[Company Name] funding round" to find announced funding
-   - Search "[Company Name] LinkedIn" to verify the company has a real presence
-   - Search "[Company Name] news" for recent press coverage
-   - If CH status is borderline, search "[Company Name] administration" or "[Company Name] winding up" to check for red flags
-4. Cross-reference: if Companies House says one thing but web signals say another, flag the contradiction explicitly.
-5. Call companies_house_lookup and web_fetch_url in the same turn if both are available — they run in parallel.
-6. When all inputs have been researched, call done.
-
-Be proactive with web_search. The goal is not just to collect data from the provided URL but to independently verify the company's legitimacy.`;
+Steps (follow exactly, in order):
+1. If a company number is provided, call companies_house_lookup.
+2. If a supplementary URL is provided, call web_fetch_url on that URL — it is a reputable primary source, trust it.
+3. Call done immediately. Do not call any other tools. Do not web_search.`;
 }
 
 function buildInitialMessages(
@@ -459,7 +406,7 @@ export async function runResearcherWithToolUse({
       model: MODEL_RESEARCHER,
       max_tokens: 4096,
       system: systemPrompt,
-      tools: TOOLS,
+      tools: getTools(flow, hasFile, hasLinks),
       tool_choice: { type: "auto" },
       messages,
     });
