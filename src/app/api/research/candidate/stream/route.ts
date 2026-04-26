@@ -115,7 +115,7 @@ export async function POST(request: Request) {
           send("step", { label });
         };
 
-        // Subscribe before calling runResearcher. tool_result events that
+        // Subscribe before calling runCoordinator. tool_result events that
         // carry a full Evidence object are also re-emitted as "evidence" SSE
         // events so the frontend renders evidence cards as each one is collected.
         unsubscribe = subscribe(runId, (wireEvent) => {

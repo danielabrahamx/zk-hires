@@ -47,7 +47,7 @@ export async function runCoordinator(input: CoordinatorInput): Promise<Coordinat
       data: { iteration },
     });
 
-    const research = await runResearcher(researcherInput, emit, runId);
+    const research = await runResearcher(researcherInput, runId);
 
     const seen = new Set(allEvidence.map((e) => e.id));
     for (const ev of research.evidence) {
