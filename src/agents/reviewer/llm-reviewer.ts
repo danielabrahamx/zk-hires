@@ -87,8 +87,10 @@ Examine the evidence documents carefully, then make a final determination by cal
 - Matched data points show what was extracted
 
 **Win Announcement** (source: web_lookup, x, linkedin)
-- Posts on LinkedIn or X from the candidate or organizer announcing a win
-- "is_win_announcement:true" in matched_data_points is critical
+- Posts on LinkedIn or X from the candidate or organizer announcing a win, prize, or builder award
+- "is_win_announcement:true" in matched_data_points is a strong positive signal
+- Organizers often post builder spotlights ("Great work @handle, here's $1,000") — these ARE win announcements even without the word "winner"
+- If an established organizer account (high authority) mentions a prize amount tied to a project or person, treat that as sufficient evidence of a win
 - authority level (high for LinkedIn/X, medium for press, low for unknown)
 
 **Organizer Profile** (in certificate evidence)

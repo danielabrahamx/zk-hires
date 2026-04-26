@@ -39,11 +39,17 @@ Return ONLY a JSON object with these exact fields:
   "organizer_name": "<organization that ran the event, or null>",
   "winner_name": "<name of the winner/person who placed, or null>",
   "year": <4-digit year as integer, or null>,
-  "is_win_announcement": <true if this content announces or confirms a hackathon/competition win, else false>
+  "is_win_announcement": <true if this content announces, confirms, or implies a hackathon/competition win or prize award, else false>
 }
 
-is_win_announcement should be true only if the content explicitly states someone won, placed, or was awarded in a competition.
-Set all string fields to null if the content is not a win announcement.`;
+is_win_announcement should be true if ANY of these apply:
+- The content explicitly states someone won, placed, or was awarded in a competition or hackathon
+- An organizer congratulates a person/team and mentions a prize amount (even without using the word "winner")
+- A person/team is highlighted as a prize recipient or builder spotlight from a hackathon organizer
+- The content says someone received a grant, bounty, or award from a hackathon or builder program
+
+Set is_win_announcement to false only if the content is clearly unrelated to hackathon prizes (e.g. a product announcement, job post, or general news with no prize mention).
+winner_name may be a Twitter handle if no real name is given.`;
 
 // Stable verifier system prompt — cached when length permits.
 const VERIFY_SYSTEM_PROMPT = `You are a verification agent. Determine whether the extracted win signals are actually supported by the source content.
@@ -61,9 +67,11 @@ Return ONLY this JSON object (no preamble):
 }
 
 confidence rules:
-- "high": is_win_announcement verified AND event_name verified AND winner_name verified
-- "medium": is_win_announcement verified AND (event_name OR winner_name verified)
-- "low": is_win_announcement not verified OR neither event_name nor winner_name verified
+- "high": is_win_announcement verified AND (event_name verified OR winner_name verified)
+- "medium": is_win_announcement verified AND at least one other field has some support in the content
+- "low": is_win_announcement not verified, OR the content is clearly not about a prize/award at all
+
+Note: an organizer spotlighting a builder with a prize amount IS a win announcement even without explicit "winner" language.
 
 If the content is empty or irrelevant, set confidence: "low" with a rejection_reason.`;
 
