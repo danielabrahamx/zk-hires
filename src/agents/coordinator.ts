@@ -3,10 +3,10 @@ import { runReviewer } from "@/agents/reviewer";
 import { emitEvent } from "@/trace/store";
 import type { Evidence } from "@/types/evidence";
 import type { Finding } from "@/types/finding";
-import type { Gap } from "@/types/gap";
+import type { Gap, GapCategory } from "@/types/gap";
 
 const MAX_ITERATIONS = 2;
-const RETRYABLE_GAPS = new Set(["insufficient_evidence", "low_confidence"]);
+const RETRYABLE_GAPS = new Set<GapCategory>(["insufficient_evidence", "low_confidence"]);
 
 export interface CoordinatorInput {
   flow: "candidate" | "employer";
@@ -27,6 +27,7 @@ export async function runCoordinator(input: CoordinatorInput): Promise<Coordinat
   const allEvidence: Evidence[] = [];
   let lastGap: Gap | null = null;
   let researcherInput = input.researcherInput;
+  let completedIterations = 0;
 
   emitEvent({
     run_id: runId,
@@ -37,6 +38,7 @@ export async function runCoordinator(input: CoordinatorInput): Promise<Coordinat
   });
 
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+    completedIterations = iteration + 1;
     emitEvent({
       run_id: runId,
       agent: "coordinator",
@@ -106,14 +108,14 @@ export async function runCoordinator(input: CoordinatorInput): Promise<Coordinat
     run_id: runId,
     agent: "coordinator",
     kind: "decision",
-    message: `Coordinator done — Gap after ${MAX_ITERATIONS} iteration(s): ${lastGap?.category}`,
-    data: { iterations: MAX_ITERATIONS, gapCategory: lastGap?.category },
+    message: `Coordinator done — Gap after ${completedIterations} iteration(s): ${lastGap?.category}`,
+    data: { iterations: completedIterations, gapCategory: lastGap?.category },
   });
 
   return {
     evidence: allEvidence,
     findings: [],
     gaps: lastGap ? [lastGap] : [],
-    iterations: MAX_ITERATIONS,
+    iterations: completedIterations,
   };
 }
