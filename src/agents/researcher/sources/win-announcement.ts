@@ -186,7 +186,7 @@ async function fetchWithFirecrawl(url: string): Promise<string | null> {
 // Twitter/X oEmbed fallback. Free, no auth, returns the rendered tweet HTML
 // including author handle and tweet text. Reliable for x.com / twitter.com
 // where native fetch hits a JS shell or bot wall.
-async function fetchWithOEmbed(url: string): Promise<string | null> {
+async function fetchWithOEmbed(url: string): Promise<{ text: string; handle: string | null } | null> {
   let hostname: string;
   try {
     hostname = new URL(url).hostname.toLowerCase();
@@ -200,10 +200,20 @@ async function fetchWithOEmbed(url: string): Promise<string | null> {
       { signal: AbortSignal.timeout(10_000) }
     );
     if (!res.ok) return null;
-    const data = (await res.json()) as { html?: string; author_name?: string };
+    const data = (await res.json()) as { html?: string; author_name?: string; author_url?: string };
     const text = stripHtml(data.html ?? "");
     if (text.length < 20) return null;
-    return `Author: ${data.author_name ?? "unknown"}\n\n${text}`;
+    const handle = (() => {
+      const url = data.author_url;
+      if (!url) return null;
+      try {
+        const last = new URL(url).pathname.split("/").filter(Boolean).pop();
+        return last ? last.replace(/^@/, "") : null;
+      } catch {
+        return null;
+      }
+    })();
+    return { text: `Author: ${data.author_name ?? "unknown"}\n\n${text}`, handle };
   } catch {
     return null;
   }
@@ -266,14 +276,14 @@ async function fetchWithSyndication(url: string): Promise<string | null> {
   }
 }
 
-async function fetchPageContent(url: string): Promise<{ text: string; resolvedUrl: string }> {
+async function fetchPageContent(url: string): Promise<{ text: string; resolvedUrl: string; authorHandle: string | null }> {
   assertSafeUrl(url);
   const md = await fetchWithFirecrawl(url);
-  if (md) return { text: md, resolvedUrl: url };
+  if (md) return { text: md, resolvedUrl: url, authorHandle: null };
   const syn = await fetchWithSyndication(url);
-  if (syn) return { text: syn, resolvedUrl: url };
+  if (syn) return { text: syn, resolvedUrl: url, authorHandle: null };
   const oembed = await fetchWithOEmbed(url);
-  if (oembed) return { text: oembed, resolvedUrl: url };
+  if (oembed) return { text: oembed.text, resolvedUrl: url, authorHandle: oembed.handle };
   try {
     const res = await fetch(url, {
       headers: {
@@ -283,9 +293,9 @@ async function fetchPageContent(url: string): Promise<{ text: string; resolvedUr
       signal: AbortSignal.timeout(15_000),
     });
     const html = await res.text();
-    return { text: stripHtml(html).slice(0, 8_000), resolvedUrl: res.url ?? url };
+    return { text: stripHtml(html).slice(0, 8_000), resolvedUrl: res.url ?? url, authorHandle: null };
   } catch {
-    return { text: `URL: ${url} (fetch failed or timed out)`, resolvedUrl: url };
+    return { text: `URL: ${url} (fetch failed or timed out)`, resolvedUrl: url, authorHandle: null };
   }
 }
 
@@ -350,7 +360,7 @@ function deriveConfidenceTier(
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export async function winAnnouncementLookup(url: string, runId: string): Promise<Evidence> {
-  const { text: pageText, resolvedUrl } = await fetchPageContent(url);
+  const { text: pageText, resolvedUrl, authorHandle } = await fetchPageContent(url);
   const rawArtifactHash = toHex(sha256(utf8ToBytes(pageText)));
   const { source, authority } = getSourceAndAuthority(url);
   const client = new Anthropic();
@@ -389,6 +399,9 @@ export async function winAnnouncementLookup(url: string, runId: string): Promise
   matchedDataPoints.push(`verified_field_count:${verification.verified_field_count}`);
   if (verification.rejection_reason) {
     matchedDataPoints.push(`verification_rejection:${verification.rejection_reason}`);
+  }
+  if (authorHandle) {
+    matchedDataPoints.push(`tweet_author_handle:${authorHandle}`);
   }
 
   return {
