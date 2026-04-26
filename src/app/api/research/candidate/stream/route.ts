@@ -74,6 +74,13 @@ export async function POST(request: Request) {
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
+    const MAX_FILE_BYTES = 10 * 1024 * 1024;
+    if (fileEntry.size > MAX_FILE_BYTES) {
+      return new Response(
+        JSON.stringify({ error: "File too large (max 10 MB)" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
     buffer = Buffer.from(await fileEntry.arrayBuffer());
   }
 

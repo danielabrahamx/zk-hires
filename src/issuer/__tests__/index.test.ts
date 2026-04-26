@@ -84,7 +84,8 @@ describe("issuer/index", () => {
     );
     expect(result.proof_code).toMatch(/^ZKH-[0-9A-F]{4}-[0-9A-F]{4}$/);
     expect(result.public_claims.claim_type).toBe("reputable_company");
-    expect(result.public_claims.claim_value).toBe("1");
+    // claim_value now encodes funding bracket: 1 + bracketIndex("500k_2m") = 2
+    expect(result.public_claims.claim_value).toBe("2");
   }, 30000);
 
   it("throws NullifierCollisionError on replay with same subject + claim_type", async () => {

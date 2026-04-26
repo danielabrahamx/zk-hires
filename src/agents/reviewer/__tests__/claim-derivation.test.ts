@@ -76,7 +76,10 @@ describe("deriveCandidateFinding", () => {
     expect("type" in result).toBe(false);
     if (!("type" in result)) {
       expect(result.claim_type).toBe("hackathon_wins");
-      expect(result.reason).toContain("confidence threshold");
+      // Structured Gap: low-confidence certificate maps to "low_confidence"
+      // category; the reason is the user-facing message for that category.
+      expect(result.category).toBe("low_confidence");
+      expect(result.reason.toLowerCase()).toMatch(/weak|confidence/);
       expect(result.missing_evidence.length).toBeGreaterThan(0);
     }
   });

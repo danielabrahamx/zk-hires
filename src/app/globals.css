@@ -68,7 +68,7 @@
   --border: oklch(0.934 0.004 80);          /* #edece9 */
   --input: oklch(0.896 0.005 78);           /* #e1dfda */
   --ring: oklch(0.632 0.004 75);
-  --radius: 0.5rem;
+  --radius: 0.625rem;
   --sidebar: oklch(0.956 0.003 84);
   --sidebar-foreground: oklch(0.213 0.003 18);
   --sidebar-primary: oklch(0.213 0.003 18);
@@ -114,14 +114,14 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-weight: 300;
+    font-weight: 400;
   }
   html {
     @apply font-sans;
   }
   h1, h2, h3, h4 {
-    font-weight: 300;
-    letter-spacing: -0.02em;
+    font-weight: 600;
+    letter-spacing: -0.025em;
   }
 }
 

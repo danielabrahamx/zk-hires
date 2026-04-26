@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import type { Evidence } from "@/types/evidence";
+import { emitEvent } from "@/trace/store";
+import { MODEL_VISION } from "@/config/runtime";
 
 /**
  * Certificate upload source.
@@ -84,21 +86,50 @@ export async function certificateUpload(
 
   const contentBlock = buildContentBlock(file, mimeType);
 
-  const response = await client.messages.create({
-    model: "claude-opus-4-7",
-    max_tokens: 1024,
-    messages: [
-      {
-        role: "user",
-        content: [contentBlock, { type: "text", text: PROMPT }],
-      },
-    ],
+  emitEvent({
+    run_id: runId,
+    agent: "researcher.certificate",
+    kind: "tool_call",
+    message: `OCR'ing certificate via ${MODEL_VISION}`,
+    data: { model: MODEL_VISION, mime_type: mimeType, byte_length: file.length },
   });
+
+  let response;
+  try {
+    response = await client.messages.create({
+      model: MODEL_VISION,
+      max_tokens: 1024,
+      messages: [
+        {
+          role: "user",
+          content: [contentBlock, { type: "text", text: PROMPT }],
+        },
+      ],
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    emitEvent({
+      run_id: runId,
+      agent: "researcher.certificate",
+      kind: "error",
+      message: `Vision OCR failed: ${message}`,
+      data: { model: MODEL_VISION, mime_type: mimeType },
+      error: message,
+    });
+    throw err;
+  }
 
   const textBlock = response.content.find((b) => b.type === "text");
   const text = (textBlock && "text" in textBlock ? textBlock.text : "").trim();
 
   if (text === "REFUSED" || text.startsWith("REFUSED")) {
+    emitEvent({
+      run_id: runId,
+      agent: "researcher.certificate",
+      kind: "decision",
+      message: "Vision model refused: not a hackathon certificate",
+      data: { model: MODEL_VISION, refusal: true },
+    });
     throw new RefusalError();
   }
 
@@ -106,17 +137,42 @@ export async function certificateUpload(
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    throw new Error(
-      `Failed to parse Claude response as JSON: ${(err as Error).message}`
-    );
+    const errMessage = (err as Error).message;
+    emitEvent({
+      run_id: runId,
+      agent: "researcher.certificate",
+      kind: "error",
+      message: `Failed to parse Claude response as JSON: ${errMessage}`,
+      data: { model: MODEL_VISION, response_length: text.length },
+      error: errMessage,
+    });
+    throw new Error(`Failed to parse Claude response as JSON: ${errMessage}`);
   }
 
   const fields: CertificateFields = CertificateFieldsSchema.parse(parsed);
 
   const rawArtifactHash = toHex(sha256(new Uint8Array(file)));
+  const evidenceId = randomUUID();
+
+  emitEvent({
+    run_id: runId,
+    agent: "researcher.certificate",
+    kind: "tool_result",
+    message: `Extracted certificate: ${fields.event_name} (${fields.year})`,
+    data: {
+      model: MODEL_VISION,
+      organizer_name: fields.organizer_name,
+      event_name: fields.event_name,
+      year: fields.year,
+      content_length: text.length,
+      confidence_tier: "high",
+      evidence_id: evidenceId,
+    },
+    evidence_ids: [evidenceId],
+  });
 
   const evidence: Evidence = {
-    id: randomUUID(),
+    id: evidenceId,
     run_id: runId,
     source: "certificate",
     retrieved_at: new Date().toISOString(),

@@ -36,6 +36,13 @@ export type InvestigationFinalResult = {
   expires_at?: number;
 };
 
+export type ActiveToolCall = {
+  agent: string;
+  tool: string;
+  input: unknown;
+  startedAt: number;
+};
+
 export type InvestigationState = {
   status: InvestigationStatus;
   trace: WireTraceEvent[];
@@ -45,6 +52,8 @@ export type InvestigationState = {
   sourcesActive: Set<string>;
   /** Agents that have emitted a final tool_result or decision (or errored out). */
   sourcesCompleted: Set<string>;
+  /** Tool calls in flight, keyed by agent. Cleared when matching tool_result/error fires. */
+  activeToolCalls: Map<string, ActiveToolCall>;
   evidence: Evidence[];
   findings: Finding[];
   gap: Gap | null;
@@ -59,6 +68,7 @@ const initialState: InvestigationState = {
   phase: "",
   sourcesActive: new Set(),
   sourcesCompleted: new Set(),
+  activeToolCalls: new Map(),
   evidence: [],
   findings: [],
   gap: null,
@@ -176,12 +186,41 @@ export function useInvestigation(): UseInvestigationReturn {
             ) {
               sourcesCompleted.add(ev.agent);
             }
+
+            // Track in-flight tool calls so the dashboard can show a Claude Code
+            // style "Calling X..." badge between tool_call and tool_result.
+            // Streaming planner-reasoning events (tool_result with streaming:true)
+            // are NOT terminals — ignore them when clearing active calls.
+            const activeToolCalls = new Map(s.activeToolCalls);
+            const data = (ev.data ?? null) as Record<string, unknown> | null;
+            const isStreamingPartial =
+              ev.kind === "tool_result" &&
+              !!data &&
+              data.streaming === true;
+            if (ev.kind === "tool_call") {
+              const tool =
+                typeof data?.tool === "string" ? data.tool : ev.agent;
+              activeToolCalls.set(ev.agent, {
+                agent: ev.agent,
+                tool,
+                input: data?.input ?? null,
+                startedAt: Date.now(),
+              });
+            } else if (
+              (ev.kind === "tool_result" && !isStreamingPartial) ||
+              ev.kind === "error" ||
+              ev.kind === "decision"
+            ) {
+              activeToolCalls.delete(ev.agent);
+            }
+
             return {
               ...s,
               trace: [...s.trace, ev],
               phase: getStepLabel(ev.agent),
               sourcesActive,
               sourcesCompleted,
+              activeToolCalls,
             };
           });
           return;
@@ -223,6 +262,7 @@ export function useInvestigation(): UseInvestigationReturn {
               p.evidence && p.evidence.length > 0 ? p.evidence : s.evidence,
             findings:
               p.findings && p.findings.length > 0 ? p.findings : s.findings,
+            activeToolCalls: new Map(),
           }));
           return;
         }
@@ -232,7 +272,7 @@ export function useInvestigation(): UseInvestigationReturn {
         }
         case "gap": {
           const g = payload as Gap;
-          setState((s) => ({ ...s, status: "gap", gap: g }));
+          setState((s) => ({ ...s, status: "gap", gap: g, activeToolCalls: new Map() }));
           return;
         }
         case "result":
@@ -247,6 +287,7 @@ export function useInvestigation(): UseInvestigationReturn {
             ...s,
             status: "error",
             error: p.error ?? "Unknown error",
+            activeToolCalls: new Map(),
           }));
           return;
         }

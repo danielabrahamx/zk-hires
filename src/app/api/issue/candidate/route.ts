@@ -1,116 +1,125 @@
 import { NextResponse } from "next/server";
 
-import { runResearcher } from "@/agents/researcher";
-import { runReviewer } from "@/agents/reviewer";
 import { issueCredential } from "@/issuer";
-import { storeCredential } from "@/trace/store";
+import {
+  lookupResearchSession,
+  markResearchSessionConsumed,
+  storeCredential,
+} from "@/trace/store";
+import type { Finding } from "@/types/finding";
+import type { Gap } from "@/types/gap";
+import type { Evidence } from "@/types/evidence";
 
-const SSE_HEADERS = {
-  "Content-Type": "text/event-stream",
-  "Cache-Control": "no-cache, no-transform",
-  Connection: "keep-alive",
-  "X-Accel-Buffering": "no",
-};
+/**
+ * Stage 2 of the candidate issuance flow.
+ *
+ * Body: { session_id: string } - the id returned by the matching
+ * /api/research/candidate/stream completion.
+ *
+ * Looks up the persisted research session, verifies it has a viable
+ * Finding (and isn't already consumed), then signs and stores a
+ * credential. Returns the proof code, public claims, signed proof
+ * JSON and nullifier.
+ */
 
-function encode(data: object): Uint8Array {
-  return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
+interface ResearchPayload {
+  evidence: Evidence[];
+  findings: Finding[];
+  gap: Gap | null;
 }
 
 export async function POST(request: Request) {
-  let formData: FormData;
+  let body: { session_id?: string };
   try {
-    formData = await request.formData();
+    body = (await request.json()) as { session_id?: string };
   } catch {
-    return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const fileEntry = formData.get("file");
-  const rawLinks = formData.get("postLinks");
-
-  let postLinks: string[] = [];
-  if (typeof rawLinks === "string" && rawLinks.trim()) {
-    try {
-      const parsed = JSON.parse(rawLinks) as unknown;
-      if (Array.isArray(parsed)) {
-        postLinks = parsed.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
-      }
-    } catch {
-      // ignore malformed
-    }
-  }
-
-  const hasFile = fileEntry instanceof File;
-  const hasLinks = postLinks.length > 0;
-
-  if (!hasFile && !hasLinks) {
+  const sessionId = body.session_id?.trim();
+  if (!sessionId) {
     return NextResponse.json(
-      { error: "Provide a certificate file or at least one post link" },
+      { error: "session_id is required" },
       { status: 400 }
     );
   }
 
-  let buffer: Buffer | null = null;
-  let mimeType = "";
-  if (hasFile) {
-    mimeType = fileEntry.type || "application/octet-stream";
-    if (mimeType !== "application/pdf" && !mimeType.startsWith("image/")) {
-      return NextResponse.json(
-        { error: "File must be a PDF or image (jpeg, png, webp, gif)" },
-        { status: 400 }
-      );
-    }
-    buffer = Buffer.from(await fileEntry.arrayBuffer());
+  const session = lookupResearchSession(sessionId);
+  if (!session) {
+    return NextResponse.json(
+      { error: "Research session not found" },
+      { status: 404 }
+    );
   }
 
-  const researcherInput = hasFile && buffer
-    ? { claim_type: "hackathon_wins" as const, file: buffer, mimeType, postLinks: hasLinks ? postLinks : undefined }
-    : { claim_type: "hackathon_wins" as const, postLinks };
+  if (session.consumed_at !== null) {
+    return NextResponse.json(
+      { error: "Session already used" },
+      { status: 409 }
+    );
+  }
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (data: object) => controller.enqueue(encode(data));
-      const emit = (label: string) => send({ type: "step", label });
+  if (session.claim_type !== "hackathon_wins") {
+    return NextResponse.json(
+      { error: "Session claim_type does not match candidate flow" },
+      { status: 400 }
+    );
+  }
 
-      try {
-        const { evidence, runId } = await runResearcher(researcherInput, emit);
+  let payload: ResearchPayload;
+  try {
+    payload = JSON.parse(session.payload) as ResearchPayload;
+  } catch {
+    return NextResponse.json(
+      { error: "Corrupt research session payload" },
+      { status: 500 }
+    );
+  }
 
-        emit("Reviewing evidence...");
-        const { findings, gaps } = await runReviewer(evidence, "candidate", runId);
+  if (payload.gap) {
+    return NextResponse.json(
+      { error: "Cannot issue: research returned a gap", gap: payload.gap },
+      { status: 400 }
+    );
+  }
 
-        if (gaps.length > 0 || findings.length === 0) {
-          send({
-            type: "gap",
-            ...(gaps[0] ?? {
-              claim_type: "hackathon_wins",
-              reason: "No findings produced",
-              missing_evidence: [],
-            }),
-          });
-          return;
-        }
+  if (!payload.findings || payload.findings.length === 0) {
+    return NextResponse.json(
+      { error: "Cannot issue: no findings in research session" },
+      { status: 400 }
+    );
+  }
 
-        emit("Issuing credential...");
-        const issued = await issueCredential(findings);
-        const now = Math.floor(Date.now() / 1000);
-        storeCredential({
-          proof_code: issued.proof_code,
-          claim_type: findings[0].type,
-          claim_value: findings[0].type === "hackathon_wins" ? String(findings[0].count) : "1",
-          proof_json: issued.proof_json,
-          public_claims: issued.public_claims,
-          nullifier: issued.nullifier,
-          issued_at: now,
-          expires_at: now + 365 * 24 * 3600,
-        });
+  try {
+    const issued = await issueCredential(payload.findings);
+    const finding = payload.findings[0];
+    const claim_value =
+      finding.type === "hackathon_wins" ? String(finding.count) : "1";
+    const now = Math.floor(Date.now() / 1000);
 
-        send({ type: "result", proof_code: issued.proof_code, public_claims: issued.public_claims });
-      } catch (err) {
-        send({ type: "error", message: err instanceof Error ? err.message : String(err) });
-      } finally {
-        controller.close();
-      }
-    },
-  });
+    storeCredential({
+      proof_code: issued.proof_code,
+      claim_type: finding.type,
+      claim_value,
+      proof_json: issued.proof_json,
+      public_claims: issued.public_claims,
+      nullifier: issued.nullifier,
+      issued_at: now,
+      expires_at: now + 365 * 24 * 3600,
+    });
 
-  return new Response(stream, { headers: SSE_HEADERS });
+    markResearchSessionConsumed(sessionId);
+
+    return NextResponse.json({
+      proof_code: issued.proof_code,
+      public_claims: issued.public_claims,
+      proof_json: issued.proof_json,
+      nullifier: issued.nullifier,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 500 }
+    );
+  }
 }

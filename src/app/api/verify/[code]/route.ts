@@ -18,6 +18,8 @@ export async function GET(
   }
 
   return NextResponse.json({
+    claim_type: credential.claim_type,
+    claim_value: credential.claim_value,
     public_claims: credential.public_claims,
     issued_at: credential.issued_at,
     expires_at: credential.expires_at,

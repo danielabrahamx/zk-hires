@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import type { Evidence } from "@/types/evidence";
+import { MODEL_EXTRACT, MODEL_VERIFY } from "@/config/runtime";
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -44,33 +45,38 @@ Return ONLY a JSON object with these exact fields:
 is_win_announcement should be true only if the content explicitly states someone won, placed, or was awarded in a competition.
 Set all string fields to null if the content is not a win announcement.`;
 
-function buildVerifyPrompt(content: string, signals: WinSignals): string {
-  return `You are a verification agent. Determine whether the extracted win signals are actually supported by the source content.
+// Stable verifier system prompt — cached when length permits.
+const VERIFY_SYSTEM_PROMPT = `You are a verification agent. Determine whether the extracted win signals are actually supported by the source content.
 
-Page content:
-${content}
+Be strict: only verify a field if the page content provides direct evidence.
 
-Extracted signals:
-- event_name: ${signals.event_name ?? "null"}
-- organizer_name: ${signals.organizer_name ?? "null"}
-- winner_name: ${signals.winner_name ?? "null"}
-- year: ${signals.year ?? "null"}
-- is_win_announcement: ${signals.is_win_announcement}
-
-Return ONLY this JSON:
+Return ONLY this JSON object (no preamble):
 {
   "is_win_announcement_verified": true or false,
   "winner_name_verified": true or false,
   "event_name_verified": true or false,
   "verified_field_count": <integer 0-4>,
   "confidence": "high" or "medium" or "low",
-  "rejection_reason": "<explanation if low, else null>"
+  "rejection_reason": "<short explanation if low, else null>"
 }
 
 confidence rules:
 - "high": is_win_announcement verified AND event_name verified AND winner_name verified
 - "medium": is_win_announcement verified AND (event_name OR winner_name verified)
-- "low": is_win_announcement not verified OR neither event_name nor winner_name verified`;
+- "low": is_win_announcement not verified OR neither event_name nor winner_name verified
+
+If the content is empty or irrelevant, set confidence: "low" with a rejection_reason.`;
+
+function buildVerifyUserMessage(content: string, signals: WinSignals): string {
+  return `Page content:
+${content}
+
+Extracted signals to verify:
+- event_name: ${signals.event_name ?? "null"}
+- organizer_name: ${signals.organizer_name ?? "null"}
+- winner_name: ${signals.winner_name ?? "null"}
+- year: ${signals.year ?? "null"}
+- is_win_announcement: ${signals.is_win_announcement}`;
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -91,6 +97,30 @@ function stripHtml(html: string): string {
     .replace(/&[a-z#0-9]+;/gi, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+function assertSafeUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid URL: ${url}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`Only HTTPS URLs are allowed (got ${parsed.protocol})`);
+  }
+  const h = parsed.hostname.toLowerCase();
+  const blocked = [
+    "localhost", "127.", "0.0.0.0", "::1",
+    "169.254.", "metadata.google.",
+    "10.", "172.16.", "172.17.", "172.18.", "172.19.",
+    "172.20.", "172.21.", "172.22.", "172.23.", "172.24.",
+    "172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
+    "172.30.", "172.31.", "192.168.",
+  ];
+  if (blocked.some((b) => h === b.replace(/\.$/, "") || h.startsWith(b))) {
+    throw new Error(`URL points to a blocked internal address: ${h}`);
+  }
 }
 
 function extractJsonObject(text: string): string {
@@ -153,9 +183,38 @@ async function fetchWithFirecrawl(url: string): Promise<string | null> {
   }
 }
 
+// Twitter/X oEmbed fallback. Free, no auth, returns the rendered tweet HTML
+// including author handle and tweet text. Reliable for x.com / twitter.com
+// where native fetch hits a JS shell or bot wall.
+async function fetchWithOEmbed(url: string): Promise<string | null> {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  if (!hostname.includes("twitter.com") && !hostname.includes("x.com")) return null;
+  try {
+    const res = await fetch(
+      `https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=1`,
+      { signal: AbortSignal.timeout(10_000) }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { html?: string; author_name?: string };
+    const text = stripHtml(data.html ?? "");
+    if (text.length < 20) return null;
+    return `Author: ${data.author_name ?? "unknown"}\n\n${text}`;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchPageContent(url: string): Promise<{ text: string; resolvedUrl: string }> {
+  assertSafeUrl(url);
   const md = await fetchWithFirecrawl(url);
   if (md) return { text: md, resolvedUrl: url };
+  const oembed = await fetchWithOEmbed(url);
+  if (oembed) return { text: oembed, resolvedUrl: url };
   try {
     const res = await fetch(url, {
       headers: {
@@ -175,11 +234,16 @@ async function fetchPageContent(url: string): Promise<{ text: string; resolvedUr
 
 async function extractSignals(client: Anthropic, content: string): Promise<WinSignals> {
   const msg = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+    model: MODEL_EXTRACT,
     max_tokens: 512,
-    messages: [
-      { role: "user", content: `${EXTRACT_PROMPT}\n\nContent:\n${content}` },
+    system: [
+      {
+        type: "text",
+        text: EXTRACT_PROMPT,
+        cache_control: { type: "ephemeral" },
+      },
     ],
+    messages: [{ role: "user", content: `Content:\n${content}` }],
   });
   const block = msg.content.find((b) => b.type === "text");
   const text = (block && "text" in block ? block.text : "").trim();
@@ -193,10 +257,17 @@ async function verifySignals(
   signals: WinSignals
 ): Promise<WinVerification> {
   const msg = await client.messages.create({
-    model: "claude-sonnet-4-6",
+    model: MODEL_VERIFY,
     max_tokens: 512,
+    system: [
+      {
+        type: "text",
+        text: VERIFY_SYSTEM_PROMPT,
+        cache_control: { type: "ephemeral" },
+      },
+    ],
     messages: [
-      { role: "user", content: buildVerifyPrompt(content, signals) },
+      { role: "user", content: buildVerifyUserMessage(content, signals) },
     ],
   });
   const block = msg.content.find((b) => b.type === "text");

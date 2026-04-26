@@ -3,6 +3,8 @@ import { utf8ToBytes } from "@noble/hashes/utils.js";
 import { randomUUID } from "node:crypto";
 
 import type { Evidence } from "@/types/evidence";
+import { emitEvent } from "@/trace/store";
+import { tierForCompanyStatus } from "@/config/runtime";
 
 /**
  * Companies House lookup source.
@@ -48,19 +50,56 @@ export async function companiesHouseLookup(
   const authHeader = `Basic ${Buffer.from(apiKey + ":").toString("base64")}`;
   const url = `${baseUrl}/company/${paddedNumber}`;
 
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      Authorization: authHeader,
-      Accept: "application/json",
-    },
+  emitEvent({
+    run_id: runId,
+    agent: "researcher.companies_house",
+    kind: "tool_call",
+    message: `Fetching company ${paddedNumber} from Companies House`,
+    data: { companyNumber: paddedNumber, url },
   });
 
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: authHeader,
+        Accept: "application/json",
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    emitEvent({
+      run_id: runId,
+      agent: "researcher.companies_house",
+      kind: "error",
+      message: `Companies House fetch failed: ${message}`,
+      data: { companyNumber: paddedNumber, url },
+      error: message,
+    });
+    throw err;
+  }
+
   if (response.status === 404) {
+    emitEvent({
+      run_id: runId,
+      agent: "researcher.companies_house",
+      kind: "tool_result",
+      message: `Company ${paddedNumber} not found (404)`,
+      data: { companyNumber: paddedNumber, http_status: 404 },
+    });
     throw new NotFoundError(`Company ${paddedNumber} not found`);
   }
 
   if (!response.ok) {
+    emitEvent({
+      run_id: runId,
+      agent: "researcher.companies_house",
+      kind: "error",
+      message: `Companies House API error ${response.status}`,
+      data: { companyNumber: paddedNumber, http_status: response.status },
+      error: `HTTP ${response.status}`,
+    });
     throw new Error(`Companies House API error ${response.status}`);
   }
 
@@ -77,11 +116,43 @@ export async function companiesHouseLookup(
     profile.jurisdiction,
   ].filter((v): v is string => typeof v === "string" && v.length > 0);
 
-  const confidenceTier: Evidence["confidence_tier"] =
-    profile.company_status === "active" ? "very_high" : "low";
+  const confidenceTier: Evidence["confidence_tier"] = tierForCompanyStatus(
+    profile.company_status
+  );
+
+  const evidenceId = randomUUID();
+
+  emitEvent({
+    run_id: runId,
+    agent: "researcher.companies_house",
+    kind: "tool_result",
+    message: `Companies House returned ${response.status}, company_status=${profile.company_status ?? "unknown"}`,
+    data: {
+      companyNumber: paddedNumber,
+      http_status: response.status,
+      content_length: rawBody.length,
+      company_name: profile.company_name,
+      company_status: profile.company_status,
+      evidence_id: evidenceId,
+    },
+    evidence_ids: [evidenceId],
+  });
+
+  emitEvent({
+    run_id: runId,
+    agent: "researcher.companies_house",
+    kind: "decision",
+    message: `Confidence tier ${confidenceTier} for status "${profile.company_status ?? "unknown"}"`,
+    data: {
+      company_status: profile.company_status,
+      confidence_tier: confidenceTier,
+      evidence_id: evidenceId,
+    },
+    evidence_ids: [evidenceId],
+  });
 
   const evidence: Evidence = {
-    id: randomUUID(),
+    id: evidenceId,
     run_id: runId,
     source: "companies_house",
     source_url: url,

@@ -5,6 +5,8 @@ import {
   OrganizerProfileSchema,
   type OrganizerProfile,
 } from "@/types/evidence";
+import { emitEvent } from "@/trace/store";
+import { MODEL_VISION } from "@/config/runtime";
 
 /**
  * Organizer profile lookup source.
@@ -55,14 +57,25 @@ function extractJsonObject(text: string): string {
 }
 
 export async function lookupOrganizerProfile(
-  organizer: string
+  organizer: string,
+  runId?: string
 ): Promise<OrganizerProfile> {
   const client = new Anthropic();
+
+  if (runId) {
+    emitEvent({
+      run_id: runId,
+      agent: "researcher.organizer_profile",
+      kind: "tool_call",
+      message: `Researching organizer "${organizer}" via web_search`,
+      data: { model: MODEL_VISION, organizer },
+    });
+  }
 
   let response: AnthropicMessage;
   try {
     response = (await client.messages.create({
-      model: "claude-opus-4-7",
+      model: MODEL_VISION,
       max_tokens: 2048,
       tools: [
         {
@@ -105,6 +118,16 @@ Return ONLY a JSON object with exactly these fields:
     })) as unknown as AnthropicMessage;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (runId) {
+      emitEvent({
+        run_id: runId,
+        agent: "researcher.organizer_profile",
+        kind: "error",
+        message: `Anthropic API call failed: ${message}`,
+        data: { organizer },
+        error: message,
+      });
+    }
     throw new Error(
       `Anthropic API call failed for organizer "${organizer}": ${message}`
     );
@@ -117,15 +140,52 @@ Return ONLY a JSON object with exactly these fields:
     parsed = JSON.parse(extractJsonObject(text));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (runId) {
+      emitEvent({
+        run_id: runId,
+        agent: "researcher.organizer_profile",
+        kind: "error",
+        message: `Failed to parse profile JSON: ${message}`,
+        data: { organizer, content_length: text.length },
+        error: message,
+      });
+    }
     throw new Error(
       `Failed to parse organizer profile for "${organizer}": ${message}`
     );
   }
 
   try {
-    return OrganizerProfileSchema.parse(parsed);
+    const profile = OrganizerProfileSchema.parse(parsed);
+    if (runId) {
+      emitEvent({
+        run_id: runId,
+        agent: "researcher.organizer_profile",
+        kind: "tool_result",
+        message: `Resolved profile @${profile.handle} on ${profile.platform}`,
+        data: {
+          organizer,
+          handle: profile.handle,
+          platform: profile.platform,
+          follower_count: profile.follower_count,
+          cross_platform_handle_count: profile.cross_platform_handles.length,
+          third_party_coverage_count: profile.third_party_coverage_urls.length,
+        },
+      });
+    }
+    return profile;
   } catch (err) {
     if (err instanceof ZodError) {
+      if (runId) {
+        emitEvent({
+          run_id: runId,
+          agent: "researcher.organizer_profile",
+          kind: "error",
+          message: `Profile schema validation failed: ${err.message}`,
+          data: { organizer },
+          error: err.message,
+        });
+      }
       throw new Error(
         `Organizer profile schema validation failed for "${organizer}": ${err.message}`
       );
