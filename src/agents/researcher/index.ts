@@ -19,12 +19,13 @@ import { EvidenceSchema, type Evidence } from "@/types/evidence";
 export type StepEmitter = (label: string) => void;
 
 export type ResearcherInput =
-  | { claim_type: "hackathon_wins"; file: Buffer; mimeType: string; postLinks?: string[] }
-  | { claim_type: "hackathon_wins"; postLinks: string[] }
+  | { claim_type: "hackathon_wins"; file: Buffer; mimeType: string; postLinks?: string[]; contextHints?: string[] }
+  | { claim_type: "hackathon_wins"; postLinks: string[]; contextHints?: string[] }
   | {
       claim_type: "reputable_company";
       companyNumber?: string;
       supplementaryUrl?: string;
+      contextHints?: string[];
     };
 
 export interface ResearcherResult {
