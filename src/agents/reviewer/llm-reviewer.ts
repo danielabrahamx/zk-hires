@@ -95,11 +95,18 @@ Examine the evidence documents carefully, then make a final determination by cal
 - follower_count > 10,000 and account_age_months > 12 → established organizer
 - third_party_coverage_urls → external validation the organizer is real
 
+**Tweet Author X Profile** (organizer_profile populated on win_announcement evidence)
+- The candidate may submit only a tweet URL (no certificate). The tweet author's X profile is verified by the verify_tweet_author tool and attached to the win_announcement Evidence.
+- follower_count > 1000 AND account_age_months > 12 → established account, strong legitimacy signal
+- follower_count > 100 AND account_age_months > 6 → plausible, moderate signal
+- follower_count < 50 OR account_age_months < 3 → suspicious, treat as low confidence
+- All-null profile fields (Firecrawl unavailable or account suspended) → cannot verify the author; do not block on this alone if the tweet content itself is strong, but lower confidence accordingly
+
 ### Confidence Tiers (you must choose high or very_high for a Finding)
 
-- **very_high**: Certificate from verified organizer (strong profile) + win announcement from trusted source; multiple corroborating pieces of evidence
-- **high**: Strong certificate alone from recognizable organizer, OR verified win announcement from LinkedIn/X without certificate
-- **Cannot issue**: Evidence is weak, unverifiable, conflicting, or doesn't confirm an actual win → call emit_gap instead
+- **very_high**: Certificate from verified organizer (strong profile) + win announcement from trusted source; OR tweet win announcement from established X author (>1k followers AND >12mo account age) with clear extracted fields; multiple corroborating signals.
+- **high**: Strong certificate alone from recognizable organizer, OR verified tweet win announcement from a plausible X author (>100 followers AND >6mo account age, OR profile fields unverifiable but tweet content itself is strong and authority is high).
+- **Cannot issue**: Evidence is weak, unverifiable, conflicting, OR the tweet author profile shows clear suspicion signals (very new account, near-zero followers, suspended) → call emit_gap instead.
 
 ### Gap Categories
 - ocr_failure: Certificate couldn't be read or extracted fields are garbled
