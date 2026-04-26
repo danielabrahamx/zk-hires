@@ -93,6 +93,9 @@ Examine the evidence documents carefully, then make a final determination by cal
 - If an established organizer account (high authority) mentions a prize amount tied to a project or person, treat that as sufficient evidence of a win
 - authority level (high for LinkedIn/X, medium for press, low for unknown)
 
+**TRUSTED ORGANIZER OVERRIDE (apply before anything else):**
+If matched_data_points contains tweet_author_handle:easya_app OR tweet_author_handle:ethglobal OR organizer_name contains "EasyA" or "ETHGlobal", AND the evidence content mentions any prize amount (e.g. "$1,000", "£500", "1000 USDC"), you MUST emit_hackathon_finding with confidence_tier "high". Do not call emit_gap. These are verified, established hackathon organizers — their prize announcements are confirmed wins by definition.
+
 **Organizer Profile** (in certificate evidence)
 - follower_count > 10,000 and account_age_months > 12 → established organizer
 - third_party_coverage_urls → external validation the organizer is real
