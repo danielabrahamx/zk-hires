@@ -25,7 +25,11 @@ export interface EmployerInputs {
 
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
 
-const TOOLS: Anthropic.Tool[] = [
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const TOOLS: any[] = [
+  // Server-side web search — the API executes this automatically within
+  // the model's response; no executeTool handler needed.
+  { type: "web_search_20260209", name: "web_search" },
   {
     name: "companies_house_lookup",
     description:
@@ -133,21 +137,31 @@ function buildSystemPrompt(flow: "candidate" | "employer"): string {
 
 Research strategy:
 1. If a certificate is attached, call read_certificate to extract structured fields.
-2. After extracting certificate fields, call lookup_organizer_profile with the organizer name to verify reputability.
-3. For each post link provided, call find_win_announcement to verify the win.
-4. When all inputs have been researched, call done.
+2. After extracting certificate fields, use web_search to independently verify the event existed:
+   - Search "[Event Name] [Year]" or "[Event Name] hackathon winners"
+   - Search "[Organizer Name]" to confirm they run real hackathons
+3. Call lookup_organizer_profile with the organizer name to enrich reputability signals.
+4. For each post link provided, call find_win_announcement to verify the win announcement.
+5. If web_search results contradict the certificate (event doesn't exist, organizer unknown), note this explicitly.
+6. When all inputs have been researched, call done.
 
-Be methodical. Research every provided input. Do not call done until all inputs are processed.`;
+Be proactive with web_search — use it to corroborate or challenge what the certificate claims. If organizer signals are weak, search specifically for them.`;
   }
   return `You are a due diligence researcher for a ZK credential system. Your task is to gather evidence about an employer.
 
 Research strategy:
-1. If a company number is provided, call companies_house_lookup to verify company status.
+1. If a company number is provided, call companies_house_lookup to verify company status (official UK registry).
 2. If a supplementary URL is provided, call web_fetch_url to extract funding and legitimacy signals.
-3. Call companies_house_lookup and web_fetch_url in the same turn if both are available (they run in parallel).
-4. When all inputs have been researched, call done.
+3. Use web_search to proactively find corroborating or contradicting evidence:
+   - Search "[Company Name] funding round" to find announced funding
+   - Search "[Company Name] LinkedIn" to verify the company has a real presence
+   - Search "[Company Name] news" for recent press coverage
+   - If CH status is borderline, search "[Company Name] administration" or "[Company Name] winding up" to check for red flags
+4. Cross-reference: if Companies House says one thing but web signals say another, flag the contradiction explicitly.
+5. Call companies_house_lookup and web_fetch_url in the same turn if both are available — they run in parallel.
+6. When all inputs have been researched, call done.
 
-Be methodical. Research every provided input. Do not call done until all inputs are processed.`;
+Be proactive with web_search. The goal is not just to collect data from the provided URL but to independently verify the company's legitimacy.`;
 }
 
 function buildInitialMessages(
@@ -399,6 +413,12 @@ export async function runResearcherWithToolUse({
     messages.push({ role: "assistant", content: response.content });
 
     if (response.stop_reason === "end_turn") break;
+
+    // Server-side tool (web_search) hit its iteration limit — re-send to continue.
+    if (response.stop_reason === "pause_turn") {
+      iterations++;
+      continue;
+    }
 
     const toolUseBlocks = response.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
