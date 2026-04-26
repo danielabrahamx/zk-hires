@@ -125,7 +125,7 @@ describe("deriveEmployerFinding", () => {
     }
   });
 
-  it("returns Gap when Companies House evidence is missing", () => {
+  it("issues credential from web evidence alone when bracket meets threshold", () => {
     const cb = makeEvidence({
       source: "web_lookup",
       signal_type: "funding_round",
@@ -134,14 +134,31 @@ describe("deriveEmployerFinding", () => {
 
     const result = deriveEmployerFinding([cb], randomUUID());
 
-    expect("type" in result).toBe(false);
-    if (!("type" in result)) {
-      expect(result.claim_type).toBe("reputable_company");
-      expect(result.missing_evidence).toContain("active Companies House record");
+    expect("type" in result).toBe(true);
+    if ("type" in result && result.type === "reputable_company") {
+      expect(result.bracket_at_least).toBe("500k_2m");
+      expect(result.confidence_tier).toBe("high");
     }
   });
 
-  it("returns Gap when funding bracket is below threshold", () => {
+  it("returns Gap when web-only evidence has bracket below threshold", () => {
+    const cb = makeEvidence({
+      source: "web_lookup",
+      signal_type: "funding_round",
+      confidence_tier: "high",
+      matched_data_points: ["funding_bracket:lt_500k"],
+    });
+
+    const result = deriveEmployerFinding([cb], randomUUID());
+
+    expect("type" in result).toBe(false);
+    if (!("type" in result)) {
+      expect(result.claim_type).toBe("reputable_company");
+      expect(result.reason).toContain("below");
+    }
+  });
+
+  it("issues credential when CH present even if web bracket is below threshold", () => {
     const ch = makeEvidence({
       source: "companies_house",
       signal_type: "company_record",
@@ -157,10 +174,10 @@ describe("deriveEmployerFinding", () => {
 
     const result = deriveEmployerFinding([ch, cb], randomUUID());
 
-    expect("type" in result).toBe(false);
-    if (!("type" in result)) {
-      expect(result.claim_type).toBe("reputable_company");
-      expect(result.reason).toContain("below threshold");
+    expect("type" in result).toBe(true);
+    if ("type" in result) {
+      expect(result.type).toBe("reputable_company");
+      expect(result.confidence_tier).toBe("very_high");
     }
   });
 });

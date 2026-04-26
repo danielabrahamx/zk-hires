@@ -81,37 +81,42 @@ export function deriveEmployerFinding(
   const ch = evidence.find(
     (e) => e.source === "companies_house" && e.confidence_tier === "very_high"
   );
-  const cb = evidence.find((e) => e.source === "web_lookup");
+  const web = evidence.find((e) => e.source === "web_lookup");
 
-  const missing: string[] = [];
-  if (!ch) missing.push("active Companies House record");
-  if (!cb) missing.push("web lookup funding record");
-
-  if (!ch || !cb) {
+  // Need at least one source
+  if (!ch && !web) {
     return {
       claim_type: "reputable_company",
-      reason: `Missing required evidence: ${missing.join(", ")}`,
-      missing_evidence: missing,
+      reason: "No evidence provided — supply a Companies House number, a supporting URL, or both",
+      missing_evidence: ["Companies House record or supporting URL"],
     };
   }
 
-  const bracket = extractFundingBracket(cb);
-  if (bracket === null) {
-    return {
-      claim_type: "reputable_company",
-      reason: "Web lookup evidence has no funding bracket",
-      missing_evidence: ["funding_bracket annotation on web lookup evidence"],
-    };
-  }
+  // Extract funding bracket from web evidence if present.
+  // Fall back to "lt_500k" when evidence is present but unparseable —
+  // the URL was reachable and analysed; absence of explicit funding data
+  // is not grounds for rejection on its own.
+  const bracket: FundingBracket = web
+    ? (extractFundingBracket(web) ?? "lt_500k")
+    : "lt_500k";
 
   const threshold = getFundingThreshold();
-  if (bracketIndex(bracket) < bracketIndex(threshold)) {
+
+  // Only enforce the funding threshold when web evidence is present AND
+  // the bracket is explicitly below threshold AND there is no CH record
+  // to compensate. CH-verified companies skip the funding gate — the
+  // registry confirmation is itself a strong legitimacy signal.
+  if (web && !ch && bracketIndex(bracket) < bracketIndex(threshold)) {
     return {
       claim_type: "reputable_company",
-      reason: `Funding bracket ${bracket} is below threshold ${threshold}`,
-      missing_evidence: [`funding round at >= ${threshold}`],
+      reason: `Funding evidence is below the ${threshold} threshold. Add a Companies House number or a URL with stronger funding signals.`,
+      missing_evidence: [`funding round >= ${threshold} or active Companies House record`],
     };
   }
+
+  const evidenceIds = [ch?.id, web?.id].filter((id): id is string => Boolean(id));
+  const confidenceTier: "very_high" | "high" =
+    ch && web ? "very_high" : "high";
 
   return {
     id: randomUUID(),
@@ -120,7 +125,7 @@ export function deriveEmployerFinding(
     value: true,
     bracket_at_least: bracket,
     jurisdiction: "uk",
-    evidence_ids: [ch.id, cb.id],
-    confidence_tier: "very_high",
+    evidence_ids: evidenceIds,
+    confidence_tier: confidenceTier,
   };
 }
