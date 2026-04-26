@@ -5,6 +5,17 @@ import { runReviewer } from "@/agents/reviewer";
 import { issueCredential } from "@/issuer";
 import { storeCredential } from "@/trace/store";
 
+const SSE_HEADERS = {
+  "Content-Type": "text/event-stream",
+  "Cache-Control": "no-cache, no-transform",
+  Connection: "keep-alive",
+  "X-Accel-Buffering": "no",
+};
+
+function encode(data: object): Uint8Array {
+  return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
+}
+
 export async function POST(request: Request) {
   let body: { companyNumber?: string; supplementaryUrl?: string };
   try {
@@ -18,58 +29,64 @@ export async function POST(request: Request) {
 
   const { companyNumber, supplementaryUrl } = body;
 
-  if (!companyNumber?.trim()) {
+  if (!companyNumber?.trim() && !supplementaryUrl?.trim()) {
     return NextResponse.json(
-      { error: "companyNumber is required" },
-      { status: 400 }
-    );
-  }
-  if (!supplementaryUrl?.trim()) {
-    return NextResponse.json(
-      { error: "supplementaryUrl is required" },
+      { error: "Provide at least one of companyNumber or supplementaryUrl" },
       { status: 400 }
     );
   }
 
-  try {
-    const { evidence, runId } = await runResearcher({
-      claim_type: "reputable_company",
-      companyNumber: companyNumber.trim(),
-      supplementaryUrl: supplementaryUrl.trim(),
-    });
+  const cn = companyNumber?.trim() || undefined;
+  const url = supplementaryUrl?.trim() || undefined;
 
-    const { findings, gaps } = await runReviewer(evidence, "employer", runId);
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (data: object) => controller.enqueue(encode(data));
+      const emit = (label: string) => send({ type: "step", label });
 
-    if (gaps.length > 0 || findings.length === 0) {
-      return NextResponse.json({
-        gap: gaps[0] ?? {
-          claim_type: "reputable_company",
-          reason: "No findings produced",
-          missing_evidence: [],
-        },
-      });
-    }
+      try {
+        const { evidence, runId } = await runResearcher(
+          { claim_type: "reputable_company", companyNumber: cn, supplementaryUrl: url },
+          emit
+        );
 
-    const issued = await issueCredential(findings);
+        emit("Reviewing evidence...");
+        const { findings, gaps } = await runReviewer(evidence, "employer", runId);
 
-    const now = Math.floor(Date.now() / 1000);
-    storeCredential({
-      proof_code: issued.proof_code,
-      claim_type: findings[0].type,
-      claim_value: "1",
-      proof_json: issued.proof_json,
-      public_claims: issued.public_claims,
-      nullifier: issued.nullifier,
-      issued_at: now,
-      expires_at: now + 365 * 24 * 3600,
-    });
+        if (gaps.length > 0 || findings.length === 0) {
+          send({
+            type: "gap",
+            ...(gaps[0] ?? {
+              claim_type: "reputable_company",
+              reason: "No findings produced",
+              missing_evidence: [],
+            }),
+          });
+          return;
+        }
 
-    return NextResponse.json({
-      proof_code: issued.proof_code,
-      public_claims: issued.public_claims,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+        emit("Issuing credential...");
+        const issued = await issueCredential(findings);
+        const now = Math.floor(Date.now() / 1000);
+        storeCredential({
+          proof_code: issued.proof_code,
+          claim_type: findings[0].type,
+          claim_value: "1",
+          proof_json: issued.proof_json,
+          public_claims: issued.public_claims,
+          nullifier: issued.nullifier,
+          issued_at: now,
+          expires_at: now + 365 * 24 * 3600,
+        });
+
+        send({ type: "result", proof_code: issued.proof_code, public_claims: issued.public_claims });
+      } catch (err) {
+        send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, { headers: SSE_HEADERS });
 }

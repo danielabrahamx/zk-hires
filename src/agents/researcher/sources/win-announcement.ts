@@ -8,74 +8,69 @@ import type { Evidence } from "@/types/evidence";
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
-const WebSignalsSchema = z.object({
-  company_name: z.string().nullable(),
-  funding_bracket: z
-    .enum(["lt_500k", "500k_2m", "2m_10m", "gt_10m"])
-    .nullable(),
-  employee_count: z.number().nullable(),
-  founding_year: z.number().nullable(),
-  press_signals: z.array(z.string()),
+const WinSignalsSchema = z.object({
+  event_name: z.string().nullable(),
+  organizer_name: z.string().nullable(),
+  winner_name: z.string().nullable(),
+  year: z.number().int().nullable(),
+  is_win_announcement: z.boolean(),
 });
 
-type WebSignals = z.infer<typeof WebSignalsSchema>;
+type WinSignals = z.infer<typeof WinSignalsSchema>;
 
-const VerificationSchema = z.object({
-  funding_bracket_verified: z.boolean(),
-  company_name_verified: z.boolean(),
+const WinVerificationSchema = z.object({
+  is_win_announcement_verified: z.boolean(),
+  winner_name_verified: z.boolean(),
+  event_name_verified: z.boolean(),
   verified_field_count: z.number().int().min(0),
   confidence: z.enum(["high", "medium", "low"]),
   rejection_reason: z.string().nullable(),
 });
 
-type Verification = z.infer<typeof VerificationSchema>;
+type WinVerification = z.infer<typeof WinVerificationSchema>;
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
-const EXTRACT_PROMPT = `Extract company legitimacy signals from this web page content.
+const EXTRACT_PROMPT = `Extract hackathon win signals from this web page or social post content.
 Return ONLY a JSON object with these exact fields:
 {
-  "company_name": "<name or null>",
-  "funding_bracket": "<lt_500k|500k_2m|2m_10m|gt_10m|null>",
-  "employee_count": <integer or null>,
-  "founding_year": <integer or null>,
-  "press_signals": ["<coverage mention>", ...]
+  "event_name": "<hackathon or competition name, or null>",
+  "organizer_name": "<organization that ran the event, or null>",
+  "winner_name": "<name of the winner/person who placed, or null>",
+  "year": <4-digit year as integer, or null>,
+  "is_win_announcement": <true if this content announces or confirms a hackathon/competition win, else false>
 }
 
-Funding bracket guide:
-- lt_500k: bootstrap/pre-seed, <10 employees, no notable external funding
-- 500k_2m: seed stage, 10-50 employees, some angel/seed funding mentioned
-- 2m_10m: Series A, 50-200 employees, notable VC or grant funding
-- gt_10m: Series B+, 200+ employees, major institutional funding
-Use null for funding_bracket if content gives no signal either way.
-press_signals: list any mentions of press coverage, awards, or notable clients (max 5).`;
+is_win_announcement should be true only if the content explicitly states someone won, placed, or was awarded in a competition.
+Set all string fields to null if the content is not a win announcement.`;
 
-function buildVerifyPrompt(content: string, signals: WebSignals): string {
-  return `You are a verification agent. Determine whether each extracted signal is actually supported by the source content.
+function buildVerifyPrompt(content: string, signals: WinSignals): string {
+  return `You are a verification agent. Determine whether the extracted win signals are actually supported by the source content.
 
 Page content:
 ${content}
 
 Extracted signals:
-- company_name: ${signals.company_name ?? "null"}
-- funding_bracket: ${signals.funding_bracket ?? "null"} (lt_500k=bootstrap, 500k_2m=seed, 2m_10m=SeriesA, gt_10m=SeriesB+)
-- employee_count: ${signals.employee_count ?? "null"}
-- founding_year: ${signals.founding_year ?? "null"}
-- press_signals: ${signals.press_signals.join("; ") || "none"}
+- event_name: ${signals.event_name ?? "null"}
+- organizer_name: ${signals.organizer_name ?? "null"}
+- winner_name: ${signals.winner_name ?? "null"}
+- year: ${signals.year ?? "null"}
+- is_win_announcement: ${signals.is_win_announcement}
 
 Return ONLY this JSON:
 {
-  "funding_bracket_verified": true or false,
-  "company_name_verified": true or false,
-  "verified_field_count": <integer 0-5>,
+  "is_win_announcement_verified": true or false,
+  "winner_name_verified": true or false,
+  "event_name_verified": true or false,
+  "verified_field_count": <integer 0-4>,
   "confidence": "high" or "medium" or "low",
   "rejection_reason": "<explanation if low, else null>"
 }
 
 confidence rules:
-- "high": funding_bracket verified AND 2+ other fields verified
-- "medium": funding_bracket verified OR 2+ other fields verified
-- "low": funding_bracket not verified AND fewer than 2 fields verified`;
+- "high": is_win_announcement verified AND event_name verified AND winner_name verified
+- "medium": is_win_announcement verified AND (event_name OR winner_name verified)
+- "low": is_win_announcement not verified OR neither event_name nor winner_name verified`;
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -109,25 +104,24 @@ function extractJsonObject(text: string): string {
   return trimmed.slice(start, end + 1);
 }
 
-// Third-party press outranks business databases; company's own site is lowest.
-function getAuthorityLevel(url: string): "high" | "medium" | "low" {
+// Social platforms are high authority — public posts with identity backing are harder to fake.
+function getSourceAndAuthority(url: string): {
+  source: Evidence["source"];
+  authority: "high" | "medium" | "low";
+} {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
-    const high = [
-      "techcrunch.com", "bbc.co.uk", "reuters.com", "ft.com",
-      "bloomberg.com", "theguardian.com", "forbes.com", "wired.com",
-      "thetimes.co.uk", "independent.co.uk", "businessinsider.com",
-      "cnbc.com", "wsj.com", "economist.com", "sky.com",
+    if (hostname.includes("linkedin.com")) return { source: "linkedin", authority: "high" };
+    if (hostname.includes("twitter.com") || hostname.includes("x.com"))
+      return { source: "x", authority: "high" };
+    const knownPress = [
+      "techcrunch.com", "devpost.com", "hackernews", "medium.com",
+      "github.com", "dev.to", "indiehackers.com",
     ];
-    const medium = [
-      "crunchbase.com", "linkedin.com", "angel.co", "pitchbook.com",
-      "seedrs.com", "crowdcube.com",
-    ];
-    if (high.some((h) => hostname.includes(h))) return "high";
-    if (medium.some((m) => hostname.includes(m))) return "medium";
-    return "low";
+    if (knownPress.some((h) => hostname.includes(h))) return { source: "web_lookup", authority: "medium" };
+    return { source: "web_lookup", authority: "low" };
   } catch {
-    return "low";
+    return { source: "web_lookup", authority: "low" };
   }
 }
 
@@ -136,7 +130,6 @@ function getAuthorityLevel(url: string): "high" | "medium" | "low" {
 async function fetchWithFirecrawl(url: string): Promise<string | null> {
   const apiKey = process.env.FIRECRAWL_API_KEY;
   if (!apiKey) return null;
-
   try {
     const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
       method: "POST",
@@ -160,7 +153,9 @@ async function fetchWithFirecrawl(url: string): Promise<string | null> {
   }
 }
 
-async function fetchNative(url: string): Promise<{ text: string; resolvedUrl: string }> {
+async function fetchPageContent(url: string): Promise<{ text: string; resolvedUrl: string }> {
+  const md = await fetchWithFirecrawl(url);
+  if (md) return { text: md, resolvedUrl: url };
   try {
     const res = await fetch(url, {
       headers: {
@@ -176,35 +171,27 @@ async function fetchNative(url: string): Promise<{ text: string; resolvedUrl: st
   }
 }
 
-async function fetchPageContent(
-  url: string
-): Promise<{ text: string; resolvedUrl: string }> {
-  const md = await fetchWithFirecrawl(url);
-  if (md) return { text: md, resolvedUrl: url };
-  return fetchNative(url);
-}
-
 // ─── Claude passes ────────────────────────────────────────────────────────────
 
-async function extractSignals(client: Anthropic, content: string): Promise<WebSignals> {
+async function extractSignals(client: Anthropic, content: string): Promise<WinSignals> {
   const msg = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
     max_tokens: 512,
     messages: [
-      { role: "user", content: `${EXTRACT_PROMPT}\n\nPage content:\n${content}` },
+      { role: "user", content: `${EXTRACT_PROMPT}\n\nContent:\n${content}` },
     ],
   });
   const block = msg.content.find((b) => b.type === "text");
   const text = (block && "text" in block ? block.text : "").trim();
-  return WebSignalsSchema.parse(JSON.parse(extractJsonObject(text)));
+  return WinSignalsSchema.parse(JSON.parse(extractJsonObject(text)));
 }
 
-// Barcelona pattern: second-pass Sonnet verifies Haiku's extractions against raw content.
+// Barcelona pattern: Sonnet verifies Haiku's extractions against raw content.
 async function verifySignals(
   client: Anthropic,
   content: string,
-  signals: WebSignals
-): Promise<Verification> {
+  signals: WinSignals
+): Promise<WinVerification> {
   const msg = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 512,
@@ -214,41 +201,42 @@ async function verifySignals(
   });
   const block = msg.content.find((b) => b.type === "text");
   const text = (block && "text" in block ? block.text : "").trim();
-  return VerificationSchema.parse(JSON.parse(extractJsonObject(text)));
+  return WinVerificationSchema.parse(JSON.parse(extractJsonObject(text)));
 }
 
-// ─── Confidence derivation (Barcelona verification gate) ──────────────────────
+// ─── Confidence derivation ────────────────────────────────────────────────────
 
 function deriveConfidenceTier(
-  verification: Verification,
+  verification: WinVerification,
   authority: "high" | "medium" | "low"
 ): Evidence["confidence_tier"] {
   if (verification.confidence === "high" && authority === "high") return "very_high";
   if (verification.confidence === "high") return "high";
-  if (verification.confidence === "medium" && authority !== "low") return "high";
+  if (verification.confidence === "medium" && authority === "high") return "high";
   if (verification.confidence === "medium") return "medium";
   return "low";
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export async function webLookup(url: string, runId: string): Promise<Evidence> {
+export async function winAnnouncementLookup(url: string, runId: string): Promise<Evidence> {
   const { text: pageText, resolvedUrl } = await fetchPageContent(url);
   const rawArtifactHash = toHex(sha256(utf8ToBytes(pageText)));
-  const authority = getAuthorityLevel(url);
+  const { source, authority } = getSourceAndAuthority(url);
   const client = new Anthropic();
 
-  let signals: WebSignals = {
-    company_name: null,
-    funding_bracket: null,
-    employee_count: null,
-    founding_year: null,
-    press_signals: [],
+  let signals: WinSignals = {
+    event_name: null,
+    organizer_name: null,
+    winner_name: null,
+    year: null,
+    is_win_announcement: false,
   };
 
-  let verification: Verification = {
-    funding_bracket_verified: false,
-    company_name_verified: false,
+  let verification: WinVerification = {
+    is_win_announcement_verified: false,
+    winner_name_verified: false,
+    event_name_verified: false,
     verified_field_count: 0,
     confidence: "low",
     rejection_reason: "Extraction failed",
@@ -258,17 +246,15 @@ export async function webLookup(url: string, runId: string): Promise<Evidence> {
     signals = await extractSignals(client, pageText);
     verification = await verifySignals(client, pageText, signals);
   } catch {
-    // Non-fatal: emit low-confidence record so the Reviewer emits an explanatory Gap.
+    // Non-fatal: emit low-confidence record so Reviewer emits an explanatory Gap.
   }
 
-  const bracket = signals.funding_bracket ?? "lt_500k";
-  const matchedDataPoints: string[] = [`funding_bracket:${bracket}`];
-  if (signals.company_name) matchedDataPoints.push(`company_name:${signals.company_name}`);
-  if (signals.employee_count !== null) matchedDataPoints.push(`employee_count:${signals.employee_count}`);
-  if (signals.founding_year !== null) matchedDataPoints.push(`founding_year:${signals.founding_year}`);
-  for (const sig of signals.press_signals.slice(0, 5)) {
-    matchedDataPoints.push(`press:${sig}`);
-  }
+  const matchedDataPoints: string[] = [];
+  if (signals.event_name) matchedDataPoints.push(`event_name:${signals.event_name}`);
+  if (signals.organizer_name) matchedDataPoints.push(`organizer_name:${signals.organizer_name}`);
+  if (signals.winner_name) matchedDataPoints.push(`winner_name:${signals.winner_name}`);
+  if (signals.year !== null) matchedDataPoints.push(`year:${signals.year}`);
+  matchedDataPoints.push(`is_win_announcement:${signals.is_win_announcement}`);
   matchedDataPoints.push(`authority:${authority}`);
   matchedDataPoints.push(`verified_field_count:${verification.verified_field_count}`);
   if (verification.rejection_reason) {
@@ -278,14 +264,15 @@ export async function webLookup(url: string, runId: string): Promise<Evidence> {
   return {
     id: randomUUID(),
     run_id: runId,
-    source: "web_lookup",
+    source,
     source_url: resolvedUrl,
     retrieved_at: new Date().toISOString(),
     raw_artifact_hash: rawArtifactHash,
     matched_data_points: matchedDataPoints,
-    signal_type: "funding_round",
+    signal_type: "win_announcement",
     organizer_profile: null,
     reputability_score: null,
     confidence_tier: deriveConfidenceTier(verification, authority),
+    notes: signals.organizer_name ?? undefined,
   };
 }

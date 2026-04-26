@@ -33,12 +33,14 @@ export default function EmployerPage() {
   const [companyNumber, setCompanyNumber] = useState("");
   const [supplementaryUrl, setSupplementaryUrl] = useState("");
   const [loading, setLoading] = useState(false);
+  const [steps, setSteps] = useState<string[]>([]);
   const [result, setResult] = useState<Result | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!companyNumber.trim() || !supplementaryUrl.trim()) return;
+    if (!companyNumber.trim() && !supplementaryUrl.trim()) return;
     setLoading(true);
+    setSteps([]);
     setResult(null);
 
     try {
@@ -46,35 +48,62 @@ export default function EmployerPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          companyNumber: companyNumber.trim(),
-          supplementaryUrl: supplementaryUrl.trim(),
+          companyNumber: companyNumber.trim() || undefined,
+          supplementaryUrl: supplementaryUrl.trim() || undefined,
         }),
       });
 
-      const data = (await response.json()) as {
-        error?: string;
-        gap?: { reason: string; missing_evidence: string[] };
-        proof_code?: string;
-        public_claims?: Record<string, string>;
-      };
-
-      if (!response.ok) {
+      if (!response.ok || !response.body) {
+        const data = (await response.json()) as { error?: string };
         setResult({ type: "error", message: data.error ?? "Unexpected error" });
         return;
       }
-      if (data.gap) {
-        setResult({
-          type: "gap",
-          reason: data.gap.reason,
-          missing_evidence: data.gap.missing_evidence,
-        });
-        return;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          const line = part.replace(/^data: /, "").trim();
+          if (!line) continue;
+          try {
+            const event = JSON.parse(line) as {
+              type: string;
+              label?: string;
+              reason?: string;
+              missing_evidence?: string[];
+              proof_code?: string;
+              public_claims?: Record<string, string>;
+              message?: string;
+            };
+            if (event.type === "step" && event.label) {
+              setSteps((prev) => [...prev, event.label!]);
+            } else if (event.type === "gap") {
+              setResult({
+                type: "gap",
+                reason: event.reason ?? "Insufficient evidence",
+                missing_evidence: event.missing_evidence ?? [],
+              });
+            } else if (event.type === "result") {
+              setResult({
+                type: "success",
+                proof_code: event.proof_code!,
+                public_claims: event.public_claims!,
+              });
+            } else if (event.type === "error") {
+              setResult({ type: "error", message: event.message ?? "Unknown error" });
+            }
+          } catch {
+            // ignore malformed SSE frames
+          }
+        }
       }
-      setResult({
-        type: "success",
-        proof_code: data.proof_code!,
-        public_claims: data.public_claims!,
-      });
     } catch {
       setResult({ type: "error", message: "Network error - please try again" });
     } finally {
@@ -83,21 +112,21 @@ export default function EmployerPage() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex flex-col items-center justify-center p-6">
+    <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-lg space-y-6">
         <div>
           <Link
             href="/"
-            className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             &larr; Back
           </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+          <h1 className="mt-2 text-2xl tracking-tight">
             Verify Your Company
           </h1>
-          <p className="text-sm text-zinc-500 mt-1">
-            Enter your Companies House number and a supporting URL to receive a
-            ZK legitimacy credential.
+          <p className="text-sm text-muted-foreground mt-1">
+            Enter your Companies House number, a supporting URL, or both to
+            receive a ZK legitimacy credential.
           </p>
         </div>
 
@@ -105,8 +134,9 @@ export default function EmployerPage() {
           <CardHeader>
             <CardTitle>Company Details</CardTitle>
             <CardDescription>
-              We look up your company via Companies House and analyse the URL
-              you provide for legitimacy signals.
+              Provide one or both. The agents will analyse whatever you give
+              them - Companies House registry data, or any URL (website, news
+              article, LinkedIn) as a legitimacy signal.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -133,7 +163,7 @@ export default function EmployerPage() {
                   onChange={(e) => setSupplementaryUrl(e.target.value)}
                   disabled={loading}
                 />
-                <p className="text-xs text-zinc-500">
+                <p className="text-xs text-muted-foreground">
                   Your website, a news article, LinkedIn page, or Crunchbase
                   profile.
                 </p>
@@ -141,27 +171,39 @@ export default function EmployerPage() {
               <Button
                 type="submit"
                 disabled={
-                  !companyNumber.trim() ||
-                  !supplementaryUrl.trim() ||
-                  loading
+                  (!companyNumber.trim() && !supplementaryUrl.trim()) || loading
                 }
                 className="w-full"
               >
-                {loading ? (
-                  <span className="flex items-center gap-2">
-                    <span className="motion-spin inline-block size-3.5 rounded-full border-2 border-current border-t-transparent" />
-                    Verifying&hellip;
-                  </span>
-                ) : (
-                  "Generate Credential"
-                )}
+                {loading ? "Verifying..." : "Generate Credential"}
               </Button>
             </form>
           </CardContent>
         </Card>
 
+        {steps.length > 0 && (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 space-y-2">
+            <p className="text-xs text-zinc-500 uppercase tracking-wider font-medium">Agent trace</p>
+            {steps.map((label, i) => {
+              const isDone = !loading || i < steps.length - 1;
+              return (
+                <div key={i} className="flex items-center gap-2.5 text-sm">
+                  {isDone ? (
+                    <span className="text-green-400 font-bold leading-none shrink-0">✓</span>
+                  ) : (
+                    <span className="inline-block size-3 shrink-0 rounded-full border-2 border-zinc-500 border-t-transparent animate-spin" />
+                  )}
+                  <span className={isDone ? "text-zinc-400" : "text-zinc-100 font-medium"}>
+                    {label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {result?.type === "success" && (
-          <Card className="motion-fade-up border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950">
+          <Card className="border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950">
             <CardHeader>
               <CardTitle className="text-green-800 dark:text-green-200">
                 Credential Issued
@@ -203,7 +245,7 @@ export default function EmployerPage() {
         )}
 
         {result?.type === "gap" && (
-          <Alert className="motion-fade-up">
+          <Alert>
             <AlertTitle>Could not issue credential</AlertTitle>
             <AlertDescription>
               <p>{result.reason}</p>
@@ -222,7 +264,7 @@ export default function EmployerPage() {
         )}
 
         {result?.type === "error" && (
-          <Alert variant="destructive" className="motion-fade-up">
+          <Alert variant="destructive">
             <AlertTitle>Error</AlertTitle>
             <AlertDescription>{result.message}</AlertDescription>
           </Alert>

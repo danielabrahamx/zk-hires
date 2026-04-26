@@ -50,17 +50,20 @@ export function deriveCandidateFinding(
   evidence: Evidence[],
   runId: string
 ): Finding | Gap {
-  const validCerts = evidence.filter(
+  // Certificates and verified win-announcement URLs (LinkedIn posts, etc.) are both valid.
+  const validEvidence = evidence.filter(
     (e) =>
-      e.source === "certificate" &&
+      (e.source === "certificate" || e.signal_type === "win_announcement") &&
       (e.confidence_tier === "high" || e.confidence_tier === "very_high")
   );
 
-  if (validCerts.length === 0) {
+  if (validEvidence.length === 0) {
     return {
       claim_type: "hackathon_wins",
       reason: "No evidence meets confidence threshold",
-      missing_evidence: ["hackathon certificate from reputable organizer"],
+      missing_evidence: [
+        "hackathon certificate or verified social post (LinkedIn, X) announcing the win",
+      ],
     };
   }
 
@@ -68,8 +71,8 @@ export function deriveCandidateFinding(
     id: randomUUID(),
     run_id: runId,
     type: "hackathon_wins",
-    count: validCerts.length,
-    evidence_ids: validCerts.map((e) => e.id),
+    count: validEvidence.length,
+    evidence_ids: validEvidence.map((e) => e.id),
     confidence_tier: "high",
   };
 }

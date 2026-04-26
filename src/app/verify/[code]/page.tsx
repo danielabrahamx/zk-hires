@@ -59,7 +59,7 @@ export default function VerifyPage() {
         : data?.public_claims.claim_type;
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex flex-col items-center justify-center p-6">
+    <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-lg space-y-6">
         <div>
           <Link

@@ -20,7 +20,7 @@ export default async function TracePage({ params }: Props) {
   if (events.length === 0) notFound();
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-6">
+    <div className="min-h-screen bg-background p-6">
       <div className="max-w-3xl mx-auto space-y-6">
         <div>
           <Link

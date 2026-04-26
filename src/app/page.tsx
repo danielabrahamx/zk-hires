@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex flex-col">
+    <div className="min-h-screen bg-background flex flex-col">
       <header className="border-b bg-white dark:bg-zinc-900 px-6 py-4">
         <div className="max-w-4xl mx-auto flex items-baseline gap-3">
           <h1 className="text-lg font-bold tracking-tight">zk-hires</h1>

@@ -4,6 +4,7 @@ import { companiesHouseLookup } from "@/agents/researcher/sources/companies-hous
 import { webLookup } from "@/agents/researcher/sources/web-lookup";
 import { certificateUpload } from "@/agents/researcher/sources/certificate";
 import { lookupOrganizerProfile } from "@/agents/researcher/sources/organizer-profile";
+import { winAnnouncementLookup } from "@/agents/researcher/sources/win-announcement";
 import { recordEvent } from "@/trace/store";
 import { EvidenceSchema, type Evidence } from "@/types/evidence";
 
@@ -11,16 +12,19 @@ import { EvidenceSchema, type Evidence } from "@/types/evidence";
  * Researcher orchestrator.
  *
  * Two flavours:
- *  - "hackathon_wins": certificate OCR then optional organizer profile enrichment.
+ *  - "hackathon_wins": certificate file, social/web links, or both. Either path alone is sufficient.
  *  - "reputable_company": Companies House + web-lookup (any URL) run in parallel.
  */
 
+export type StepEmitter = (label: string) => void;
+
 export type ResearcherInput =
-  | { claim_type: "hackathon_wins"; file: Buffer; mimeType: string }
+  | { claim_type: "hackathon_wins"; file: Buffer; mimeType: string; postLinks?: string[] }
+  | { claim_type: "hackathon_wins"; postLinks: string[] }
   | {
       claim_type: "reputable_company";
-      companyNumber: string;
-      supplementaryUrl: string;
+      companyNumber?: string;
+      supplementaryUrl?: string;
     };
 
 export interface ResearcherResult {
@@ -29,149 +33,207 @@ export interface ResearcherResult {
 }
 
 export async function runResearcher(
-  input: ResearcherInput
+  input: ResearcherInput,
+  emit: StepEmitter = () => {}
 ): Promise<ResearcherResult> {
   const runId = randomUUID();
   if (input.claim_type === "hackathon_wins") {
-    return runCandidateFlow(input, runId);
+    return runCandidateFlow(input, runId, emit);
   }
-  return runEmployerFlow(input, runId);
+  return runEmployerFlow(input, runId, emit);
 }
 
 async function runCandidateFlow(
   input: Extract<ResearcherInput, { claim_type: "hackathon_wins" }>,
-  runId: string
+  runId: string,
+  emit: StepEmitter
 ): Promise<ResearcherResult> {
-  const certStart = Date.now();
-  recordEvent({
-    ts: certStart,
-    run_id: runId,
-    agent: "researcher",
-    action: "certificate_start",
-    input: { mimeType: input.mimeType },
-    output: null,
-    latency_ms: 0,
-    evidence_ids: [],
-  });
+  const allEvidence: Evidence[] = [];
 
-  let certEvidence: Evidence;
-  try {
-    certEvidence = await certificateUpload(input.file, input.mimeType, runId);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+  // Certificate path (optional when links are provided)
+  if ("file" in input && input.file) {
+    const certStart = Date.now();
+    emit("Reading certificate...");
     recordEvent({
-      ts: Date.now(),
+      ts: certStart,
       run_id: runId,
       agent: "researcher",
-      action: "certificate_done",
+      action: "certificate_start",
       input: { mimeType: input.mimeType },
       output: null,
-      latency_ms: Date.now() - certStart,
-      error: message,
+      latency_ms: 0,
       evidence_ids: [],
     });
-    throw err;
+
+    let certEvidence: Evidence;
+    try {
+      certEvidence = await certificateUpload(input.file, input.mimeType, runId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      recordEvent({
+        ts: Date.now(),
+        run_id: runId,
+        agent: "researcher",
+        action: "certificate_done",
+        input: { mimeType: input.mimeType },
+        output: null,
+        latency_ms: Date.now() - certStart,
+        error: message,
+        evidence_ids: [],
+      });
+      // Only rethrow if there are no links to fall back on
+      if (!input.postLinks?.length) throw err;
+      certEvidence = null as unknown as Evidence;
+    }
+
+    if (certEvidence) {
+      recordEvent({
+        ts: Date.now(),
+        run_id: runId,
+        agent: "researcher",
+        action: "certificate_done",
+        input: { mimeType: input.mimeType },
+        output: { id: certEvidence.id, signal_type: certEvidence.signal_type },
+        latency_ms: Date.now() - certStart,
+        evidence_ids: [certEvidence.id],
+      });
+
+      const organizerName = certEvidence.notes?.trim() ?? "";
+      let enriched = certEvidence;
+
+      if (organizerName.length > 0) {
+        const profStart = Date.now();
+        emit(`Looking up "${organizerName}" on social platforms...`);
+        recordEvent({
+          ts: profStart,
+          run_id: runId,
+          agent: "researcher",
+          action: "organizer_profile_start",
+          input: { organizer: organizerName },
+          output: null,
+          latency_ms: 0,
+          evidence_ids: [certEvidence.id],
+        });
+        try {
+          const profile = await lookupOrganizerProfile(organizerName);
+          recordEvent({
+            ts: Date.now(),
+            run_id: runId,
+            agent: "researcher",
+            action: "organizer_profile_done",
+            input: { organizer: organizerName },
+            output: { handle: profile.handle, platform: profile.platform },
+            latency_ms: Date.now() - profStart,
+            evidence_ids: [certEvidence.id],
+          });
+          enriched = EvidenceSchema.parse({ ...certEvidence, organizer_profile: profile });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          recordEvent({
+            ts: Date.now(),
+            run_id: runId,
+            agent: "researcher",
+            action: "organizer_profile_done",
+            input: { organizer: organizerName },
+            output: null,
+            latency_ms: Date.now() - profStart,
+            error: message,
+            evidence_ids: [certEvidence.id],
+          });
+        }
+      }
+
+      allEvidence.push(enriched);
+    }
   }
 
-  recordEvent({
-    ts: Date.now(),
-    run_id: runId,
-    agent: "researcher",
-    action: "certificate_done",
-    input: { mimeType: input.mimeType },
-    output: { id: certEvidence.id, signal_type: certEvidence.signal_type },
-    latency_ms: Date.now() - certStart,
-    evidence_ids: [certEvidence.id],
-  });
-
-  const organizerName = certEvidence.notes?.trim() ?? "";
-  if (organizerName.length === 0) {
-    return { evidence: [certEvidence], runId };
-  }
-
-  const profStart = Date.now();
-  recordEvent({
-    ts: profStart,
-    run_id: runId,
-    agent: "researcher",
-    action: "organizer_profile_start",
-    input: { organizer: organizerName },
-    output: null,
-    latency_ms: 0,
-    evidence_ids: [certEvidence.id],
-  });
-
-  try {
-    const profile = await lookupOrganizerProfile(organizerName);
-
+  // Links path — win announcement lookup for each URL (runs in parallel)
+  if (input.postLinks && input.postLinks.length > 0) {
+    const n = input.postLinks.length;
+    emit(`Fetching ${n} supporting link${n > 1 ? "s" : ""}...`);
+    const linkStart = Date.now();
     recordEvent({
-      ts: Date.now(),
+      ts: linkStart,
       run_id: runId,
       agent: "researcher",
-      action: "organizer_profile_done",
-      input: { organizer: organizerName },
-      output: { handle: profile.handle, platform: profile.platform },
-      latency_ms: Date.now() - profStart,
-      evidence_ids: [certEvidence.id],
-    });
-
-    const enriched: Evidence = EvidenceSchema.parse({
-      ...certEvidence,
-      organizer_profile: profile,
-    });
-    return { evidence: [enriched], runId };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    recordEvent({
-      ts: Date.now(),
-      run_id: runId,
-      agent: "researcher",
-      action: "organizer_profile_done",
-      input: { organizer: organizerName },
+      action: "win_announcement_start",
+      input: { urls: input.postLinks },
       output: null,
-      latency_ms: Date.now() - profStart,
-      error: message,
-      evidence_ids: [certEvidence.id],
+      latency_ms: 0,
+      evidence_ids: [],
     });
-    // Organizer profile is enrichment only - degrade gracefully.
-    return { evidence: [certEvidence], runId };
+
+    const settled = await Promise.allSettled(
+      input.postLinks.map((url) => winAnnouncementLookup(url, runId))
+    );
+    const linkEvidence: Evidence[] = [];
+    for (const r of settled) {
+      if (r.status === "fulfilled") linkEvidence.push(r.value);
+    }
+
+    recordEvent({
+      ts: Date.now(),
+      run_id: runId,
+      agent: "researcher",
+      action: "win_announcement_done",
+      input: { urls: input.postLinks },
+      output: { count: linkEvidence.length },
+      latency_ms: Date.now() - linkStart,
+      evidence_ids: linkEvidence.map((e) => e.id),
+    });
+
+    allEvidence.push(...linkEvidence);
   }
+
+  return { evidence: allEvidence, runId };
 }
 
 async function runEmployerFlow(
   input: Extract<ResearcherInput, { claim_type: "reputable_company" }>,
-  runId: string
+  runId: string,
+  emit: StepEmitter
 ): Promise<ResearcherResult> {
   const startTs = Date.now();
 
-  recordEvent({
-    ts: startTs,
-    run_id: runId,
-    agent: "researcher",
-    action: "companies_house_start",
-    input: { companyNumber: input.companyNumber },
-    output: null,
-    latency_ms: 0,
-    evidence_ids: [],
-  });
-  recordEvent({
-    ts: startTs,
-    run_id: runId,
-    agent: "researcher",
-    action: "web_lookup_start",
-    input: { url: input.supplementaryUrl },
-    output: null,
-    latency_ms: 0,
-    evidence_ids: [],
-  });
+  const lookups: Array<Promise<Evidence>> = [];
+  const lookupTypes: Array<"ch" | "web"> = [];
 
-  let chEvidence: Evidence;
-  let webEvidence: Evidence;
+  if (input.companyNumber) {
+    emit(`Looking up company ${input.companyNumber} on Companies House...`);
+    recordEvent({
+      ts: startTs,
+      run_id: runId,
+      agent: "researcher",
+      action: "companies_house_start",
+      input: { companyNumber: input.companyNumber },
+      output: null,
+      latency_ms: 0,
+      evidence_ids: [],
+    });
+    lookups.push(companiesHouseLookup(input.companyNumber, runId));
+    lookupTypes.push("ch");
+  }
+
+  if (input.supplementaryUrl) {
+    const host = (() => { try { return new URL(input.supplementaryUrl).hostname; } catch { return input.supplementaryUrl; } })();
+    emit(`Analysing ${host}...`);
+    recordEvent({
+      ts: startTs,
+      run_id: runId,
+      agent: "researcher",
+      action: "web_lookup_start",
+      input: { url: input.supplementaryUrl },
+      output: null,
+      latency_ms: 0,
+      evidence_ids: [],
+    });
+    lookups.push(webLookup(input.supplementaryUrl, runId));
+    lookupTypes.push("web");
+  }
+
+  let results: Evidence[];
   try {
-    [chEvidence, webEvidence] = await Promise.all([
-      companiesHouseLookup(input.companyNumber, runId),
-      webLookup(input.supplementaryUrl, runId),
-    ]);
+    results = await Promise.all(lookups);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     recordEvent({
@@ -189,26 +251,31 @@ async function runEmployerFlow(
   }
 
   const doneTs = Date.now();
-  recordEvent({
-    ts: doneTs,
-    run_id: runId,
-    agent: "researcher",
-    action: "companies_house_done",
-    input: { companyNumber: input.companyNumber },
-    output: { id: chEvidence.id, confidence_tier: chEvidence.confidence_tier },
-    latency_ms: doneTs - startTs,
-    evidence_ids: [chEvidence.id],
-  });
-  recordEvent({
-    ts: doneTs,
-    run_id: runId,
-    agent: "researcher",
-    action: "web_lookup_done",
-    input: { url: input.supplementaryUrl },
-    output: { id: webEvidence.id, confidence_tier: webEvidence.confidence_tier },
-    latency_ms: doneTs - startTs,
-    evidence_ids: [webEvidence.id],
+  results.forEach((ev, i) => {
+    if (lookupTypes[i] === "ch") {
+      recordEvent({
+        ts: doneTs,
+        run_id: runId,
+        agent: "researcher",
+        action: "companies_house_done",
+        input: { companyNumber: input.companyNumber },
+        output: { id: ev.id, confidence_tier: ev.confidence_tier },
+        latency_ms: doneTs - startTs,
+        evidence_ids: [ev.id],
+      });
+    } else {
+      recordEvent({
+        ts: doneTs,
+        run_id: runId,
+        agent: "researcher",
+        action: "web_lookup_done",
+        input: { url: input.supplementaryUrl },
+        output: { id: ev.id, confidence_tier: ev.confidence_tier },
+        latency_ms: doneTs - startTs,
+        evidence_ids: [ev.id],
+      });
+    }
   });
 
-  return { evidence: [chEvidence, webEvidence], runId };
+  return { evidence: results, runId };
 }

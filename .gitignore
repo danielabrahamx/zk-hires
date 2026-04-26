@@ -48,3 +48,7 @@ circuit/target/
 !circuit/target/circuit.json
 !circuit/target/prove_credential.json
 .env
+playwright-report/
+test-results/
+
+.vercel
