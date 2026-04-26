@@ -98,6 +98,21 @@ const TOOLS: any[] = [
     },
   },
   {
+    name: "verify_tweet_author",
+    description:
+      "Verify the legitimacy of an X (Twitter) profile by handle. Returns follower count, account age estimate, and verified status. Use this on the tweet author handle (revealed by find_win_announcement as 'tweet_author_handle:<handle>' in matched_data_points) to assess whether the account looks like a real, established person/org. Attaches the resulting profile to the most recent win_announcement Evidence.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        handle: {
+          type: "string",
+          description: "X handle without the @ prefix (e.g. 'ETHGlobal' not '@ETHGlobal')",
+        },
+      },
+      required: ["handle"],
+    },
+  },
+  {
     name: "done",
     description:
       "Signal that you have gathered all available evidence. Call this after researching every provided input.",
@@ -124,6 +139,8 @@ function agentIdForTool(toolName: string): TraceEventAgent {
       return "researcher.certificate";
     case "lookup_organizer_profile":
       return "researcher.organizer_profile";
+    case "verify_tweet_author":
+      return "researcher.organizer_profile";
     case "find_win_announcement":
       return "researcher.win_announcement";
     default:
@@ -131,8 +148,27 @@ function agentIdForTool(toolName: string): TraceEventAgent {
   }
 }
 
-function buildSystemPrompt(flow: "candidate" | "employer"): string {
+function buildSystemPrompt(
+  flow: "candidate" | "employer",
+  hasFile: boolean,
+  hasLinks: boolean,
+): string {
   if (flow === "candidate") {
+    // Tweet-only: focused prompt, no certificate-flow noise
+    if (!hasFile && hasLinks) {
+      return `You are a due diligence researcher for a ZK credential system. The candidate has provided ONE OR MORE post links (X tweet, LinkedIn post, etc.) as evidence of a hackathon win, with NO certificate.
+
+Research strategy:
+1. For EACH post link provided, call find_win_announcement to verify the win announcement.
+2. For each tweet whose extraction returned a 'tweet_author_handle:<handle>' entry in matched_data_points, call verify_tweet_author with that handle to assess account legitimacy (follower count, account age, verified status).
+3. When every link has been researched and every author handle has been verified, call done.
+
+DO NOT call lookup_organizer_profile — it is for certificate-based flows only.
+DO NOT call web_search — the tweet content itself is the primary evidence.
+Stop as soon as you have one verified win announcement and one verified author profile per link. Be efficient.`;
+    }
+
+    // Default candidate flow (file present, with or without links)
     return `You are a due diligence researcher for a ZK credential system. Your task is to gather evidence about a hackathon winner.
 
 Research strategy:
@@ -141,7 +177,7 @@ Research strategy:
    - Search "[Event Name] [Year]" or "[Event Name] hackathon winners"
    - Search "[Organizer Name]" to confirm they run real hackathons
 3. Call lookup_organizer_profile with the organizer name to enrich reputability signals.
-4. For each post link provided, call find_win_announcement to verify the win announcement.
+4. For each post link provided, call find_win_announcement to verify the win announcement. If the result includes a 'tweet_author_handle:<handle>' matched_data_point, you MAY also call verify_tweet_author with that handle as additional corroboration.
 5. If web_search results contradict the certificate (event doesn't exist, organizer unknown), note this explicitly.
 6. When all inputs have been researched, call done.
 
@@ -329,6 +365,36 @@ async function executeTool(
       };
     }
 
+    case "verify_tweet_author": {
+      const { verifyXProfile } = await import("./sources/x-profile");
+      const profile = await verifyXProfile(input.handle, runId);
+      // Attach the profile to the most recent win_announcement Evidence
+      let winIdx = -1;
+      for (let i = evidence.length - 1; i >= 0; i--) {
+        if (evidence[i].signal_type === "win_announcement") {
+          winIdx = i;
+          break;
+        }
+      }
+      if (winIdx >= 0) {
+        evidence[winIdx] = EvidenceSchema.parse({
+          ...evidence[winIdx],
+          organizer_profile: profile,
+        });
+      }
+      return {
+        evidence: winIdx >= 0 ? evidence[winIdx] : undefined,
+        content: JSON.stringify({
+          status: "success",
+          handle: profile.handle,
+          platform: profile.platform,
+          follower_count: profile.follower_count,
+          account_age_months: profile.account_age_months,
+          attached_to_evidence: winIdx >= 0,
+        }),
+      };
+    }
+
     case "done":
       return { content: JSON.stringify({ status: "done" }) };
 
@@ -376,7 +442,9 @@ export async function runResearcherWithToolUse({
     candidateInputs,
     employerInputs
   );
-  const baseSystemPrompt = buildSystemPrompt(flow);
+  const hasFile = !!candidateInputs?.file;
+  const hasLinks = !!(candidateInputs?.postLinks && candidateInputs.postLinks.length > 0);
+  const baseSystemPrompt = buildSystemPrompt(flow, hasFile, hasLinks);
   const sanitizeHint = (s: string) =>
     s.replace(/`/g, "'").replace(/^#+\s*/gm, "").slice(0, 500);
   const hintsSection =
