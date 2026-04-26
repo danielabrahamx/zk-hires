@@ -78,8 +78,8 @@ function getTools(flow: "candidate" | "employer", hasFile: boolean, hasLinks: bo
     return [T_COMPANIES_HOUSE, T_WEB_FETCH, T_DONE];
   }
   if (!hasFile && hasLinks) {
-    // Tweet-only candidate: read the tweet, verify the author. Nothing else.
-    return [T_WIN_ANNOUNCEMENT, T_VERIFY_AUTHOR, T_DONE];
+    // Tweet-only candidate: just read the tweet, then done.
+    return [T_WIN_ANNOUNCEMENT, T_DONE];
   }
   // Cert-based candidate (file present, with or without links)
   return [T_WEB_SEARCH, T_READ_CERT, T_ORGANIZER_PROFILE, T_WIN_ANNOUNCEMENT, T_VERIFY_AUTHOR, T_DONE];
@@ -117,16 +117,14 @@ function buildSystemPrompt(
   if (flow === "candidate") {
     // Tweet-only: focused prompt, no certificate-flow noise
     if (!hasFile && hasLinks) {
-      return `You are a due diligence researcher for a ZK credential system. The candidate has provided ONE OR MORE post links (X tweet, LinkedIn post, etc.) as evidence of a hackathon win, with NO certificate.
+      return `You are a due diligence researcher for a ZK credential system. The candidate has provided post links as evidence of a hackathon win.
 
-Research strategy:
-1. For EACH post link provided, call find_win_announcement to verify the win announcement.
-2. For each tweet whose extraction returned a 'tweet_author_handle:<handle>' entry in matched_data_points, call verify_tweet_author with that handle to assess account legitimacy (follower count, account age, verified status).
-3. When every link has been researched and every author handle has been verified, call done.
+Steps (follow exactly — no other tools exist):
+1. Call find_win_announcement for each post link.
+2. Call done.
 
-DO NOT call lookup_organizer_profile — it is for certificate-based flows only.
-DO NOT call web_search — the tweet content itself is the primary evidence.
-Stop as soon as you have one verified win announcement and one verified author profile per link. Be efficient.`;
+Known trusted organizers (treat as verified automatically): @easya_app, @ETHGlobal, @ethglobal.
+If a post is from one of these accounts or references them as organizer, the organizer is already verified — no further checks needed.`;
     }
 
     // Default candidate flow (file present, with or without links)
