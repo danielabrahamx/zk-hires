@@ -35,7 +35,7 @@ export default function Home() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Card className="hover:shadow-md transition-shadow">
+            <Card className="motion-fade-up hover:-translate-y-0.5 transition-[transform,box-shadow] duration-200 hover:shadow-md">
               <CardHeader>
                 <CardTitle>I&apos;m a candidate</CardTitle>
                 <CardDescription>
@@ -53,7 +53,7 @@ export default function Home() {
               </CardContent>
             </Card>
 
-            <Card className="hover:shadow-md transition-shadow">
+            <Card className="motion-fade-up motion-delay-1 hover:-translate-y-0.5 transition-[transform,box-shadow] duration-200 hover:shadow-md">
               <CardHeader>
                 <CardTitle>I&apos;m an employer</CardTitle>
                 <CardDescription>

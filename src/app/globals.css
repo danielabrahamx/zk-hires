@@ -128,3 +128,34 @@
     @apply font-sans;
   }
 }
+
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.motion-fade-up {
+  animation: fade-up 240ms var(--ease-out) both;
+}
+
+.motion-delay-1 { animation-delay: 60ms; }
+.motion-delay-2 { animation-delay: 120ms; }
+.motion-delay-3 { animation-delay: 180ms; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.motion-spin {
+  animation: spin 700ms linear infinite;
+}

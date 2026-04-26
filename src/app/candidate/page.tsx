@@ -120,14 +120,21 @@ export default function CandidatePage() {
                 disabled={!file || loading}
                 className="w-full"
               >
-                {loading ? "Processing - this takes ~30s..." : "Generate Credential"}
+                {loading ? (
+                  <span className="flex items-center gap-2">
+                    <span className="motion-spin inline-block size-3.5 rounded-full border-2 border-current border-t-transparent" />
+                    Processing&hellip;
+                  </span>
+                ) : (
+                  "Generate Credential"
+                )}
               </Button>
             </form>
           </CardContent>
         </Card>
 
         {result?.type === "success" && (
-          <Card className="border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950">
+          <Card className="motion-fade-up border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950">
             <CardHeader>
               <CardTitle className="text-green-800 dark:text-green-200">
                 Credential Issued
@@ -170,7 +177,7 @@ export default function CandidatePage() {
         )}
 
         {result?.type === "gap" && (
-          <Alert>
+          <Alert className="motion-fade-up">
             <AlertTitle>Could not issue credential</AlertTitle>
             <AlertDescription>
               <p>{result.reason}</p>
@@ -189,7 +196,7 @@ export default function CandidatePage() {
         )}
 
         {result?.type === "error" && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" className="motion-fade-up">
             <AlertTitle>Error</AlertTitle>
             <AlertDescription>{result.message}</AlertDescription>
           </Alert>

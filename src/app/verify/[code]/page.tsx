@@ -98,7 +98,7 @@ export default function VerifyPage() {
         )}
 
         {!loading && data && (
-          <Card>
+          <Card className="motion-fade-up">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle>{claimLabel}</CardTitle>
