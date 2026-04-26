@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { runResearcher } from "@/agents/researcher";
-import { runReviewer } from "@/agents/reviewer";
+import { runCoordinator } from "@/agents/coordinator";
 import { storeResearchSession, subscribe } from "@/trace/store";
 
 /**
@@ -127,9 +126,12 @@ export async function POST(request: Request) {
           }
         });
 
-        const research = await runResearcher(researcherInput, stepEmit, runId);
-
-        const review = await runReviewer(research.evidence, "candidate", runId);
+        const result = await runCoordinator({
+          flow: "candidate",
+          researcherInput,
+          runId,
+          emit: stepEmit,
+        });
 
         const sessionId = randomUUID();
         storeResearchSession({
@@ -137,21 +139,21 @@ export async function POST(request: Request) {
           run_id: runId,
           claim_type: "hackathon_wins",
           payload: JSON.stringify({
-            evidence: research.evidence,
-            findings: review.findings,
-            gap: review.gaps[0] ?? null,
+            evidence: result.evidence,
+            findings: result.findings,
+            gap: result.gaps[0] ?? null,
           }),
           created_at: Date.now(),
         });
 
-        if (review.gaps.length > 0) {
-          send("gap", review.gaps[0]);
+        if (result.gaps.length > 0) {
+          send("gap", result.gaps[0]);
         }
 
         send("research_done", {
           session_id: sessionId,
-          evidence: research.evidence,
-          findings: review.findings,
+          evidence: result.evidence,
+          findings: result.findings,
         });
       } catch (err) {
         send("error", {
