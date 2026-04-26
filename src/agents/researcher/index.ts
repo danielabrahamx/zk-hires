@@ -34,9 +34,10 @@ export interface ResearcherResult {
 
 export async function runResearcher(
   input: ResearcherInput,
-  emit: StepEmitter = () => {}
+  emit: StepEmitter = () => {},
+  presetRunId?: string
 ): Promise<ResearcherResult> {
-  const runId = randomUUID();
+  const runId = presetRunId ?? randomUUID();
 
   const { runResearcherWithToolUse } = await import("./tool-loop");
   if (input.claim_type === "hackathon_wins") {

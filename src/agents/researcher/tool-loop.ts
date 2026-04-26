@@ -287,7 +287,10 @@ async function executeTool(
           organizer_profile: profile,
         });
       }
+      // Return the enriched certificate Evidence so the SSE route can
+      // re-emit it — the frontend upserts by ID, updating the existing card.
       return {
+        evidence: certIdx >= 0 ? evidence[certIdx] : undefined,
         content: JSON.stringify({
           status: "success",
           handle: profile.handle,
@@ -446,6 +449,8 @@ export async function runResearcherWithToolUse({
             message: `${block.name} completed`,
             data: {
               tool: block.name,
+              // Include full Evidence object so SSE route can emit "evidence" events live
+              evidence: result.evidence ?? null,
               evidence_id: result.evidence?.id,
               confidence_tier: result.evidence?.confidence_tier,
             },
